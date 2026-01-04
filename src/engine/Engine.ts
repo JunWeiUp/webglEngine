@@ -3,6 +3,7 @@ import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
+import Stats from 'stats.js';
 
 /**
  * 引擎入口类
@@ -22,6 +23,7 @@ export class Engine {
     public interaction: InteractionManager;
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
+    public stats: Stats;
     
     // 渲染请求 ID (防抖动)
     private _rafId: number | null = null;
@@ -51,6 +53,12 @@ export class Engine {
         
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer);
+
+        // 初始化性能监控
+        this.stats = new Stats();
+        this.stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
+        this.stats.dom.style.left = '250px'; // 避开大纲视图
+        document.body.appendChild(this.stats.dom);
 
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
@@ -98,10 +106,14 @@ export class Engine {
      * 单帧渲染逻辑
      */
     private loop() {
+        this.stats.begin();
+
         // 渲染 WebGL 场景
         this.renderer.render(this.scene);
         
         // 渲染辅助图层 (Canvas 2D Overlay)
         this.auxLayer.render(this.renderer.ctx, this.scene);
+
+        this.stats.end();
     }
 }
