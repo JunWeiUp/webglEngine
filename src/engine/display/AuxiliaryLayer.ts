@@ -3,12 +3,31 @@ import { mat3, vec2 } from 'gl-matrix';
 
 export class AuxiliaryLayer {
     public hoveredNode: Node | null = null;
-    public selectedNode: Node | null = null;
+    
+    // Multi-selection support
+    public selectedNodes: Set<Node> = new Set();
+    
+    // Backward compatibility wrapper (returns first selected or null)
+    get selectedNode(): Node | null {
+        if (this.selectedNodes.size === 0) return null;
+        const first = this.selectedNodes.values().next();
+        return first.value || null;
+    }
+
+    set selectedNode(node: Node | null) {
+        this.selectedNodes.clear();
+        if (node) {
+            this.selectedNodes.add(node);
+        }
+    }
     
     // Dragging state
     public draggingNode: Node | null = null;
     public dragTargetNode: Node | null = null; // The container we are hovering over while dragging
     public dragProxyPos: vec2 = vec2.create(); // Screen position of the drag proxy
+    
+    // Box Selection
+    public selectionRect: { start: vec2, end: vec2 } | null = null;
 
     constructor() {}
 
@@ -17,12 +36,15 @@ export class AuxiliaryLayer {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
         // 1. Draw Selection
-        if (this.selectedNode && this.selectedNode !== this.draggingNode) {
-            this.drawBounds(ctx, this.selectedNode, '#0000ff', 2);
+        // Iterate over all selected nodes
+        for (const node of this.selectedNodes) {
+             if (node !== this.draggingNode) {
+                 this.drawBounds(ctx, node, '#0000ff', 2);
+             }
         }
 
         // 2. Draw Hover
-        if (this.hoveredNode && this.hoveredNode !== this.selectedNode && this.hoveredNode !== this.draggingNode) {
+        if (this.hoveredNode && !this.selectedNodes.has(this.hoveredNode) && this.hoveredNode !== this.draggingNode) {
             this.drawBounds(ctx, this.hoveredNode, '#ffff00', 2);
         }
 
@@ -43,6 +65,28 @@ export class AuxiliaryLayer {
 
             // Draw Selection for Dragging Node (since it moves with mouse now)
             this.drawBounds(ctx, this.draggingNode, '#0000ff', 2);
+        }
+        
+        // 4. Draw Selection Box
+        if (this.selectionRect) {
+            const start = this.selectionRect.start;
+            const end = this.selectionRect.end;
+            
+            const x = Math.min(start[0], end[0]);
+            const y = Math.min(start[1], end[1]);
+            const w = Math.abs(end[0] - start[0]);
+            const h = Math.abs(end[1] - start[1]);
+            
+            // Fill
+            ctx.fillStyle = 'rgba(0, 100, 255, 0.2)';
+            ctx.fillRect(x, y, w, h);
+            
+            // Border
+            ctx.strokeStyle = 'rgba(0, 100, 255, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
         }
     }
 

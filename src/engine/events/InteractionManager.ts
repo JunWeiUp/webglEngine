@@ -14,6 +14,8 @@ export class InteractionManager {
     private draggingNode: Node | null = null;
     
     private isPanning: boolean = false;
+    private isBoxSelecting: boolean = false;
+    private boxSelectStart: vec2 = vec2.create();
     private lastMousePos: vec2 = vec2.create();
 
     constructor(renderer: Renderer, scene: Node, auxLayer: AuxiliaryLayer) {
@@ -52,18 +54,61 @@ export class InteractionManager {
         return null;
     }
 
+    // Helper to get only top-level selected nodes (to avoid double moving children)
+    private getTopLevelSelectedNodes(): Node[] {
+        const topLevel: Node[] = [];
+        for (const node of this.auxLayer.selectedNodes) {
+            // Check if any ancestor is also selected
+            let isChildOfSelected = false;
+            let current = node.parent;
+            while (current) {
+                if (this.auxLayer.selectedNodes.has(current)) {
+                    isChildOfSelected = true;
+                    break;
+                }
+                current = current.parent;
+            }
+            
+            if (!isChildOfSelected) {
+                topLevel.push(node);
+            }
+        }
+        return topLevel;
+    }
+
     private onMouseDown(e: MouseEvent) {
         const pos = this.getMousePos(e);
         this.lastMousePos = pos;
 
+        // Check for Box Selection (Shift + Click/Drag)
+        if (e.shiftKey) {
+            this.isBoxSelecting = true;
+            vec2.copy(this.boxSelectStart, pos);
+            this.auxLayer.selectionRect = { start: vec2.clone(pos), end: vec2.clone(pos) };
+            
+            // Clear selection if not holding Ctrl (optional, usually Shift adds to selection or starts new box)
+            // Let's assume Shift starts a new box selection, clearing old one unless we want complex logic.
+            // For simplicity: Clear selection on start
+            this.auxLayer.selectedNodes.clear();
+            return;
+        }
+
         const hit = this.hitTest(this.scene, pos);
 
         if (hit) {
-            this.auxLayer.selectedNode = hit;
-            this.auxLayer.draggingNode = hit;
-            vec2.copy(this.auxLayer.dragProxyPos, pos);
+            // Check if hit node is already selected
+            if (this.auxLayer.selectedNodes.has(hit)) {
+                // If already selected, don't clear selection, just start dragging
+                this.auxLayer.draggingNode = hit; // Main drag handle
+                vec2.copy(this.auxLayer.dragProxyPos, pos);
+            } else {
+                // Single selection (replace)
+                this.auxLayer.selectedNode = hit; // Uses the setter to clear and add
+                this.auxLayer.draggingNode = hit;
+                vec2.copy(this.auxLayer.dragProxyPos, pos);
+            }
         } else {
-            this.auxLayer.selectedNode = null;
+            this.auxLayer.selectedNodes.clear();
             this.isPanning = true;
         }
     }
@@ -73,8 +118,15 @@ export class InteractionManager {
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
         
+        // Box Selection Logic
+        if (this.isBoxSelecting && this.auxLayer.selectionRect) {
+             vec2.copy(this.auxLayer.selectionRect.end, pos);
+             this.lastMousePos = pos;
+             return;
+        }
+
         // Hover handling (only if not dragging)
-        if (!this.auxLayer.draggingNode && !this.isPanning) {
+        if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
             const hit = this.hitTest(this.scene, pos);
             this.auxLayer.hoveredNode = hit;
             this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
@@ -82,35 +134,44 @@ export class InteractionManager {
 
         if (this.auxLayer.draggingNode) {
             // Real-time Dragging Logic
-            // Move the node immediately
+            // Move ALL selected nodes (top-level only)
             
             const draggingNode = this.auxLayer.draggingNode;
-            const parent = draggingNode.parent;
+            const topLevelNodes = this.getTopLevelSelectedNodes();
             
-            if (parent) {
-                // Calculate movement in Parent's Local Space
-                // LocalDelta = ParentWorldInverseVector * ScreenDelta
-                
-                const invertParent = mat3.create();
-                mat3.invert(invertParent, parent.transform.worldMatrix);
+            // Apply delta to all top-level nodes
+            for (const node of topLevelNodes) {
+                const parent = node.parent;
+                if (parent) {
+                    const invertParent = mat3.create();
+                    mat3.invert(invertParent, parent.transform.worldMatrix);
 
-                const m = invertParent;
-                const localDeltaX = deltaX * m[0] + deltaY * m[3];
-                const localDeltaY = deltaX * m[1] + deltaY * m[4];
+                    const m = invertParent;
+                    const localDeltaX = deltaX * m[0] + deltaY * m[3];
+                    const localDeltaY = deltaX * m[1] + deltaY * m[4];
 
-                draggingNode.transform.position[0] += localDeltaX;
-                draggingNode.transform.position[1] += localDeltaY;
-                draggingNode.transform.dirty = true;
+                    node.transform.position[0] += localDeltaX;
+                    node.transform.position[1] += localDeltaY;
+                    node.transform.dirty = true;
+                }
             }
 
             // Check Drop Target (only checking valid containers)
-            // Temporarily disable interactive for dragging node to see what's behind
-            const originalInteractive = draggingNode.interactive;
-            draggingNode.interactive = false;
+            // Temporarily disable interactive for ALL dragging nodes to see what's behind
+            // Optimization: Just disable the main dragging node + others
+            
+            const originalInteractives = new Map<Node, boolean>();
+            for (const node of topLevelNodes) {
+                originalInteractives.set(node, node.interactive);
+                node.interactive = false;
+            }
             
             const hit = this.hitTest(this.scene, pos);
             
-            draggingNode.interactive = originalInteractive;
+            // Restore interactive
+            for (const node of topLevelNodes) {
+                node.interactive = originalInteractives.get(node) || false;
+            }
 
             // Determine valid target
             let target: Node | null = hit;
@@ -118,8 +179,18 @@ export class InteractionManager {
                 target = this.scene;
             }
 
-            // Validation (not self, not parent, not descendant)
-            if (target && target !== draggingNode && target !== draggingNode.parent && !this.isDescendant(target, draggingNode)) {
+            // Validation (target must not be descendant of ANY dragged node)
+            let isValidTarget = true;
+            if (target) {
+                for (const node of topLevelNodes) {
+                    if (target === node || target === node.parent || this.isDescendant(target, node)) {
+                        isValidTarget = false;
+                        break;
+                    }
+                }
+            }
+
+            if (target && isValidTarget) {
                 this.auxLayer.dragTargetNode = target;
             } else {
                 this.auxLayer.dragTargetNode = null;
@@ -145,35 +216,92 @@ export class InteractionManager {
         return false;
     }
 
+    // Recursive box selection
+    private boxSelect(node: Node, minX: number, minY: number, maxX: number, maxY: number) {
+        if (node.interactive && node !== this.scene) { // Don't select the scene root itself
+            // Get Bounds in Screen Space
+            const corners = [
+                vec2.fromValues(0, 0),
+                vec2.fromValues(node.width, 0),
+                vec2.fromValues(node.width, node.height),
+                vec2.fromValues(0, node.height)
+            ];
+            
+            let nodeMinX = Infinity, nodeMinY = Infinity, nodeMaxX = -Infinity, nodeMaxY = -Infinity;
+            
+            for (const p of corners) {
+                const screen = vec2.create();
+                vec2.transformMat3(screen, p, node.transform.worldMatrix);
+                nodeMinX = Math.min(nodeMinX, screen[0]);
+                nodeMinY = Math.min(nodeMinY, screen[1]);
+                nodeMaxX = Math.max(nodeMaxX, screen[0]);
+                nodeMaxY = Math.max(nodeMaxY, screen[1]);
+            }
+            
+            // Check AABB intersection
+            const overlaps = (minX < nodeMaxX && maxX > nodeMinX &&
+                              minY < nodeMaxY && maxY > nodeMinY);
+                              
+            if (overlaps) {
+                this.auxLayer.selectedNodes.add(node);
+            }
+        }
+        
+        for (const child of node.children) {
+            this.boxSelect(child, minX, minY, maxX, maxY);
+        }
+    }
+
     private onMouseUp(e: MouseEvent) {
+        if (this.isBoxSelecting && this.auxLayer.selectionRect) {
+            // Finalize Box Selection
+            const start = this.auxLayer.selectionRect.start;
+            const end = this.auxLayer.selectionRect.end;
+            
+            const minX = Math.min(start[0], end[0]);
+            const minY = Math.min(start[1], end[1]);
+            const maxX = Math.max(start[0], end[0]);
+            const maxY = Math.max(start[1], end[1]);
+            
+            // Perform selection test on scene
+            this.boxSelect(this.scene, minX, minY, maxX, maxY);
+            
+            // Reset
+            this.isBoxSelecting = false;
+            this.auxLayer.selectionRect = null;
+            return;
+        }
+
         if (this.auxLayer.draggingNode) {
             // Apply Drag (Reparenting only)
             const target = this.auxLayer.dragTargetNode;
             
             if (target) {
-                 // Reparent Logic
-                 const draggingNode = this.auxLayer.draggingNode;
+                 // Reparent ALL selected nodes (top-level only)
+                 const topLevelNodes = this.getTopLevelSelectedNodes();
                  
-                 // 1. Calculate current World Position
-                 const worldPos = vec2.create();
-                 const wm = draggingNode.transform.worldMatrix;
-                 vec2.set(worldPos, wm[6], wm[7]); // Translation component
-                 
-                 // 2. Reparent
-                 target.addChild(draggingNode);
-                 
-                 // 3. Recalculate Local Position to maintain World Position
-                 // NewLocal = NewParentWorldInverse * WorldPos
-                 const invertParent = mat3.create();
-                 mat3.invert(invertParent, target.transform.worldMatrix);
-                 
-                 const newLocal = vec2.create();
-                 vec2.transformMat3(newLocal, worldPos, invertParent);
-                 
-                 draggingNode.transform.position = newLocal;
-                 draggingNode.transform.dirty = true;
-                 
-                 console.log(`Reparented ${draggingNode.name} to ${target.name}`);
+                 for (const draggingNode of topLevelNodes) {
+                     // 1. Calculate current World Position
+                     const worldPos = vec2.create();
+                     const wm = draggingNode.transform.worldMatrix;
+                     vec2.set(worldPos, wm[6], wm[7]); // Translation component
+                     
+                     // 2. Reparent
+                     target.addChild(draggingNode);
+                     
+                     // 3. Recalculate Local Position to maintain World Position
+                     // NewLocal = NewParentWorldInverse * WorldPos
+                     const invertParent = mat3.create();
+                     mat3.invert(invertParent, target.transform.worldMatrix);
+                     
+                     const newLocal = vec2.create();
+                     vec2.transformMat3(newLocal, worldPos, invertParent);
+                     
+                     draggingNode.transform.position = newLocal;
+                     draggingNode.transform.dirty = true;
+                     
+                     console.log(`Reparented ${draggingNode.name} to ${target.name}`);
+                 }
                  
                  // Trigger structure update
                  if (this.onStructureChange) {
