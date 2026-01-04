@@ -1,13 +1,19 @@
 import { Node } from '../display/Node';
+import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
 
 export class OutlineView {
     private container: HTMLElement;
     private rootNode: Node;
+    private auxLayer: AuxiliaryLayer;
     private updateInterval: number | null = null;
     private lastVersion: number = -1; // Simple version tracking
+    
+    // Map node to its DOM element for efficient updates
+    private nodeMap: Map<Node, HTMLElement> = new Map();
 
-    constructor(rootNode: Node) {
+    constructor(rootNode: Node, auxLayer: AuxiliaryLayer) {
         this.rootNode = rootNode;
+        this.auxLayer = auxLayer;
         
         // Create UI Container
         this.container = document.createElement('div');
@@ -55,7 +61,28 @@ export class OutlineView {
     public update() {
         const treeRoot = this.container.querySelector('#outline-tree-root')!;
         treeRoot.innerHTML = '';
+        this.nodeMap.clear();
         this.renderNode(this.rootNode, treeRoot, 0);
+        this.updateHighlight();
+    }
+
+    public updateHighlight() {
+        // Efficiently update styles without rebuilding DOM
+        for (const [node, item] of this.nodeMap) {
+            const isSelected = this.auxLayer.selectedNodes.has(node);
+            const isHovered = this.auxLayer.hoveredNode === node;
+
+            if (isSelected) {
+                item.style.backgroundColor = '#0055aa'; // Selected: Blue
+                item.style.color = '#ffffff';
+            } else if (isHovered) {
+                item.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'; // Hover: Light Translucent
+                item.style.color = '#ffffff';
+            } else {
+                item.style.backgroundColor = 'transparent';
+                item.style.color = '#cccccc';
+            }
+        }
     }
 
     private renderNode(node: Node, parentElement: HTMLElement, depth: number) {
@@ -65,14 +92,35 @@ export class OutlineView {
         item.style.paddingTop = '2px';
         item.style.paddingBottom = '2px';
         
-        // Highlight logic
-        item.onmouseover = () => {
-            item.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
-            node.isHovered = true; // Sync hover state
+        this.nodeMap.set(node, item);
+
+        // Click Handler: Selection
+        item.onclick = (e) => {
+            e.stopPropagation();
+            
+            // For now, simple single selection or replacement
+            // Ideally handle Shift/Ctrl for multi-select
+            this.auxLayer.selectedNode = node;
+            
+            this.rootNode.invalidate(); // Redraw canvas
+            this.updateHighlight(); // Update tree UI
         };
-        item.onmouseout = () => {
-            item.style.backgroundColor = 'transparent';
-            node.isHovered = false;
+        
+        // Hover Handlers
+        item.onmouseover = (e) => {
+            e.stopPropagation();
+            this.auxLayer.hoveredNode = node;
+            this.rootNode.invalidate();
+            this.updateHighlight();
+        };
+
+        item.onmouseout = (e) => {
+            e.stopPropagation();
+            if (this.auxLayer.hoveredNode === node) {
+                this.auxLayer.hoveredNode = null;
+                this.rootNode.invalidate();
+                this.updateHighlight();
+            }
         };
 
         const typeName = node.constructor.name;

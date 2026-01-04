@@ -50,12 +50,22 @@ export class Engine {
         this.interaction = new InteractionManager(this.renderer, this.scene, this.auxLayer);
         
         // 初始化调试用的大纲视图
-        this.outline = new OutlineView(this.scene);
+        this.outline = new OutlineView(this.scene, this.auxLayer);
 
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
             this.requestRender(); // 结构变化也触发渲染
+        };
+
+        // 监听选中/悬停变化，更新大纲视图高亮
+        this.interaction.onSelectionChange = () => {
+            this.outline.updateHighlight();
+            this.requestRender();
+        };
+        this.interaction.onHoverChange = () => {
+            this.outline.updateHighlight();
+            this.requestRender();
         };
 
         // 自动处理窗口大小调整

@@ -20,6 +20,10 @@ export class InteractionManager {
 
     // 回调函数：当场景树结构发生变化时触发（如拖拽改变父子关系）
     public onStructureChange: (() => void) | null = null;
+    // 回调函数：当选中状态发生变化时触发
+    public onSelectionChange: (() => void) | null = null;
+    // 回调函数：当悬停状态发生变化时触发
+    public onHoverChange: (() => void) | null = null;
 
     // 状态标记
     private isPanning: boolean = false;
@@ -168,6 +172,7 @@ export class InteractionManager {
             const hit = this.hitTest(this.scene, pos);
             if (this.auxLayer.hoveredNode !== hit) {
                 this.auxLayer.hoveredNode = hit;
+                if (this.onHoverChange) this.onHoverChange();
                 this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
                 needsRender = true; // 悬停状态改变，重绘
             }
