@@ -3,6 +3,8 @@ import type { IRenderer } from '../core/IRenderer';
 import { TextureManager } from '../utils/TextureManager';
 import { mat3, vec2 } from 'gl-matrix';
 
+export type TileSource = string | HTMLCanvasElement | Promise<HTMLCanvasElement>;
+
 /**
  * TileLayer (瓦片图层) 类
  * 
@@ -17,7 +19,7 @@ export class TileLayer extends Node {
     /** 基础缩放级别 (对应 scale=1 时) */
     public baseZoom: number = 12;
     /** 瓦片 URL 生成函数 */
-    public urlTemplate: (x: number, y: number, z: number) => string;
+    public tileSourceProvider: (x: number, y: number, z: number) => TileSource;
     
     // 缓存纹理
     private tileTextures: Map<string, WebGLTexture> = new Map();
@@ -34,10 +36,10 @@ export class TileLayer extends Node {
         0, 1  // BL
     ]);
 
-    constructor(tileSize: number, urlTemplate: (x: number, y: number, z: number) => string, baseZoom: number = 12) {
+    constructor(tileSize: number, tileSourceProvider: (x: number, y: number, z: number) => TileSource, baseZoom: number = 12) {
         super();
         this.tileSize = tileSize;
-        this.urlTemplate = urlTemplate;
+        this.tileSourceProvider = tileSourceProvider;
         this.baseZoom = baseZoom;
     }
 
@@ -103,19 +105,46 @@ export class TileLayer extends Node {
             for (let y = startY; y < endY; y++) {
                 // Key 需要包含缩放级别！
                 const key = `${effectiveZoom}:${x},${y}`;
-                const url = this.urlTemplate(x, y, effectiveZoom);
+                const source = this.tileSourceProvider(x, y, effectiveZoom);
 
                 // 按需加载
                 if (!this.tileTextures.has(key)) {
                     if (!this.loading.has(key)) {
                         this.loading.add(key);
-                        TextureManager.loadTexture(gl, url).then(tex => {
+
+                        const handleTexture = (tex: WebGLTexture) => {
                             this.tileTextures.set(key, tex);
                             this.loading.delete(key);
                             this.invalidate(); // 瓦片加载完成，请求重绘
-                        }).catch(() => {
-                            this.loading.delete(key);
-                        });
+                        };
+
+                        if (typeof source === 'string') {
+                            // URL 模式
+                            TextureManager.loadTexture(gl, source).then(handleTexture).catch(() => {
+                                this.loading.delete(key);
+                            });
+                        } else if (source instanceof HTMLCanvasElement || (source as any).tagName === 'CANVAS') {
+                            // 直接 Canvas 模式 (同步)
+                            // 增加 tagName 检查以增强鲁棒性
+                            const tex = TextureManager.createTextureFromSource(gl, source as HTMLCanvasElement);
+                            if (tex) {
+                                handleTexture(tex);
+                            } else {
+                                this.loading.delete(key);
+                            }
+                        } else if (source instanceof Promise) {
+                            // Promise<HTMLCanvasElement> 模式
+                            source.then(canvas => {
+                                const tex = TextureManager.createTextureFromSource(gl, canvas);
+                                if (tex) {
+                                    handleTexture(tex);
+                                } else {
+                                    this.loading.delete(key);
+                                }
+                            }).catch(() => {
+                                this.loading.delete(key);
+                            });
+                        }
                     }
                     continue;
                 }

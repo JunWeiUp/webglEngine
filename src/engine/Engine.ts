@@ -4,6 +4,7 @@ import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import Stats from 'stats.js';
+import { PerfMonitor } from './utils/perf_monitor';
 
 /**
  * 引擎入口类
@@ -24,7 +25,7 @@ export class Engine {
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
     public stats: Stats;
-    
+
     // 渲染请求 ID (防抖动)
     private _rafId: number | null = null;
 
@@ -35,22 +36,22 @@ export class Engine {
     constructor(container: HTMLElement) {
         // 初始化渲染器
         this.renderer = new Renderer(container);
-        
+
         // 初始化场景根节点
         this.scene = new Node();
         this.scene.name = "Scene";
-        
+
         // 绑定场景失效回调，触发渲染
         this.scene.onInvalidate = () => {
             this.requestRender();
         };
-        
+
         // 初始化辅助图层
         this.auxLayer = new AuxiliaryLayer();
-        
+
         // 初始化交互管理器 (连接渲染器、场景和辅助图层)
         this.interaction = new InteractionManager(this.renderer, this.scene, this.auxLayer);
-        
+
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer);
 
@@ -87,6 +88,9 @@ export class Engine {
 
         // 初始渲染
         this.requestRender();
+
+       let  perfMonitor = new PerfMonitor();
+       perfMonitor.start(this.stats.dom);
     }
 
     /**
@@ -106,14 +110,14 @@ export class Engine {
      * 单帧渲染逻辑
      */
     private loop() {
-        this.stats.begin();
+        // this.stats.begin();
 
         // 渲染 WebGL 场景
         this.renderer.render(this.scene);
-        
+
         // 渲染辅助图层 (Canvas 2D Overlay)
         this.auxLayer.render(this.renderer.ctx, this.scene);
 
-        this.stats.end();
+        // this.stats.end();
     }
 }

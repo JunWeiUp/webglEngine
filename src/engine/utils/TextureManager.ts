@@ -10,27 +10,37 @@ export class TextureManager {
             const image = new Image();
             image.crossOrigin = "Anonymous";
             image.onload = () => {
-                const texture = gl.createTexture();
-                if (!texture) {
+                const texture = this.createTextureFromSource(gl, image);
+                if (texture) {
+                    this.cache.set(url, texture);
+                    resolve(texture);
+                } else {
                     reject(new Error("Failed to create texture"));
-                    return;
                 }
-
-                gl.bindTexture(gl.TEXTURE_2D, texture);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-                
-                // WebGL1 parameters for non-power-of-2 images
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-                this.cache.set(url, texture);
-                resolve(texture);
             };
             image.onerror = (e) => reject(e);
             image.src = url;
         });
+    }
+
+    static createTextureFromSource(gl: WebGLRenderingContext, source: TexImageSource): WebGLTexture | null {
+        const texture = gl.createTexture();
+        if (!texture) return null;
+
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+
+        // WebGL1 parameters for non-power-of-2 images
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+        return texture;
+    }
+
+    static cacheTexture(key: string, texture: WebGLTexture) {
+        this.cache.set(key, texture);
     }
 
     static createWhiteTexture(gl: WebGLRenderingContext): WebGLTexture {

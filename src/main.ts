@@ -73,14 +73,14 @@ const tileLayer = new TileLayer(256, (x, y, z) => {
     ctx.strokeStyle = '#ccc';
     ctx.strokeRect(0, 0, 256, 256);
 
-    return canvas.toDataURL();
+    return canvas;
 }, 12);
 tileLayer.name = "MapLayer";
 engine.scene.addChild(tileLayer);
 
 // 2. Add a Container
 for (let i = 0; i < 10; i++) {
-    for (let j = 0; j < 50; j++) {
+    for (let j = 0; j < 10; j++) {
     const container = new Container();
     container.name = "MyContainer";
     container.transform.position = [300 * i, 300 * j];
@@ -91,7 +91,7 @@ for (let i = 0; i < 10; i++) {
     const bg = new Sprite(engine.renderer.gl);
     bg.width = 400;
     bg.height = 400;
-    bg.color = [0.8, 0.8, 1.0, 0.5];
+    bg.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
     bg.name = "ContainerBG";
     container.addChild(bg);
     engine.scene.addChild(container);
@@ -192,7 +192,7 @@ createButton("添加容器 (Container)", () => {
     const bg = new Sprite(engine.renderer.gl);
     bg.width = 200;
     bg.height = 200;
-    bg.color = [Math.random(), Math.random(), Math.random(), 0.5];
+    bg.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
     bg.name = "ContainerBG";
     container.addChild(bg);
 

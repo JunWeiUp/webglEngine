@@ -16,7 +16,7 @@ export class Sprite extends Node {
     /** 纹理图片的 URL */
     public textureUrl: string = "";
     /** 颜色叠加/混合 (RGBA) */
-    public color: Float32Array = new Float32Array([1, 1, 1, 1]);
+    public readonly color: Float32Array = new Float32Array([1, 1, 1, 1]);
 
     // --- 渲染优化共享缓冲区 (静态) ---
     // 避免每帧创建新数组
