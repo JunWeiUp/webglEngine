@@ -79,7 +79,7 @@ tileLayer.name = "MapLayer";
 engine.scene.addChild(tileLayer);
 
 // 2. Add a Container
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 10; i++) {
     for (let j = 0; j < 100; j++) {
     const container = new Container(engine.renderer.gl);
     container.name = "MyContainer";
