@@ -25,6 +25,7 @@ export class Engine {
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
     public stats: Stats;
+    public alwaysRender: boolean = false;
 
     // 渲染请求 ID (防抖动)
     private _rafId: number | null = null;
@@ -101,7 +102,12 @@ export class Engine {
         if (this._rafId === null) {
             this._rafId = requestAnimationFrame(() => {
                 this.loop();
-                this._rafId = null;
+                if (this.alwaysRender) {
+                    this._rafId = null;
+                    this.requestRender(); // 继续下一帧
+                } else {
+                    this._rafId = null;
+                }
             });
         }
     }
@@ -110,14 +116,12 @@ export class Engine {
      * 单帧渲染逻辑
      */
     private loop() {
-        // this.stats.begin();
 
         // 渲染 WebGL 场景
         this.renderer.render(this.scene);
-
+        
         // 渲染辅助图层 (Canvas 2D Overlay)
         this.auxLayer.render(this.renderer.ctx, this.scene);
 
-        // this.stats.end();
     }
 }

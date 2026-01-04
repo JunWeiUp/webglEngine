@@ -174,6 +174,7 @@ createButton("添加图片 (Sprite)", () => {
 });
 
 // 2. Add Container Button
+// 2. Add Container Button
 createButton("添加容器 (Container)", () => {
     const container = new Container(engine.renderer.gl);
     container.name = `Container_${Math.floor(Math.random() * 1000)}`;

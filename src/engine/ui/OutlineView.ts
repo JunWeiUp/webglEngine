@@ -51,15 +51,12 @@ export class OutlineView {
 
     public start() {
         this.update();
-        // Polling for structure changes
-        // A better way would be to hook into Node.addChild/removeChild
-        this.updateInterval = window.setInterval(() => {
-            this.update();
-        }, 500);
+        // Polling removed in favor of onStructureChange event
+        // The Engine now calls this.update() when structure changes.
     }
 
     public update() {
-        const treeRoot = this.container.querySelector('#outline-tree-root')!;
+        const treeRoot = this.container.querySelector('#outline-tree-root') as HTMLElement;
         treeRoot.innerHTML = '';
         this.nodeMap.clear();
         this.renderNode(this.rootNode, treeRoot, 0);
