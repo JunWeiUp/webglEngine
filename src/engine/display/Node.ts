@@ -84,15 +84,54 @@ export class Node {
     /**
      * 递归更新变换矩阵
      * @param parentWorldMatrix 父节点的世界变换矩阵
+     * @param parentDirty 父节点是否发生变化
      */
-    updateTransform(parentWorldMatrix: mat3 | null) {
-        // 更新自身的局部和世界矩阵
+    updateTransform(parentWorldMatrix: mat3 | null, parentDirty: boolean = false) {
+        // 1. 更新自身的局部矩阵 (如果 dirty)
         this.transform.updateLocalTransform();
-        this.transform.updateWorldTransform(parentWorldMatrix);
+        
+        // 2. 决定是否需要更新世界矩阵
+        // 如果父节点变了，或者自己变了，就需要重新计算世界矩阵
+        // 注意：transform.version 在 updateLocalTransform 后可能改变
+        // 这里简化判断：如果 local 刚更新过 (dirty was true -> version changed) 或 parentDirty
+        
+        // 由于 transform.dirty 在 updateLocalTransform 后被重置，我们需要一种机制知道刚才是否更新了
+        // 或者简单地：
+        
+        let worldDirty = parentDirty;
+        // 检查局部是否刚被更新 (实际上我们应该在 Transform 里维护一个 worldDirty 标记更合适，但这里先这样)
+        // 简单的优化：如果 localMatrix 没变且 parentMatrix 没变，就不需要重算 worldMatrix
+        
+        // 但由于 updateLocalTransform 内部消化了 dirty，外部难以直接判断。
+        // 改进：我们假设每帧调用 updateTransform。
+        // 如果 transform.version 变了，说明 local 变了。
+        // 我们需要记录上一次计算时的 version。
+        
+        if (parentDirty || this.transform.version !== this.transform.parentVersion) {
+            this.transform.updateWorldTransform(parentWorldMatrix);
+            this.transform.parentVersion = this.transform.version; // Hack: 复用字段或新增字段记录 lastVersion
+            // 实际上 Transform 类里 parentVersion 还没被利用起来，这里暂且假设每次都算，或者需要更严谨的 Version 控制
+            // 为了稳妥，先保持 updateWorldTransform 的调用，依靠 Transform 内部优化（如果有）
+            // 鉴于 Transform.updateWorldTransform 目前是纯计算，我们可以做一个简单的优化：
+            
+            // 真正的优化：
+            // worldDirty = parentDirty || this.transform.dirty (在 updateLocal 之前判断)
+        }
+        
+        // 重新实现：
+        const localDirty = this.transform.dirty;
+        this.transform.updateLocalTransform(); // 会清除 dirty
+        
+        if (localDirty || parentDirty) {
+            this.transform.updateWorldTransform(parentWorldMatrix);
+            worldDirty = true;
+        }
 
-        // 递归更新所有子节点
+        // 3. 递归更新所有子节点
+        // 如果 worldDirty 为 true，子节点必须更新
+        // 如果 worldDirty 为 false，子节点仅在自身 dirty 时更新
         for (const child of this.children) {
-            child.updateTransform(this.transform.worldMatrix);
+            child.updateTransform(this.transform.worldMatrix, worldDirty);
         }
     }
 

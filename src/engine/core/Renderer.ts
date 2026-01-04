@@ -197,7 +197,7 @@ export class Renderer {
         this.ctx.clearRect(0, 0, this.width, this.height);
 
         // 更新场景的世界变换矩阵
-        scene.updateTransform(null);
+        scene.updateTransform(null, true); // 根节点强制更新
 
         // 递归渲染节点树
         this.renderNode(scene);
@@ -232,8 +232,19 @@ export class Renderer {
         }
 
         // 递归遍历子节点
-        // 注意：目前即使父节点不可见，也会遍历子节点，因为子节点可能超出父节点范围。
-        // 如果实现了严格的裁剪容器，这里可以优化。
+        // 优化：如果当前节点不可见，且不是容器（即可能是叶子），则不再遍历子节点
+        // 但容器（Container）可能本身不可见（无尺寸），但子节点可见。
+        // 我们假设：如果节点有尺寸且被剔除，则其子节点也被剔除（假设子节点在父节点范围内）。
+        // 实际上 WebGL 场景图通常子节点是相对父节点的，但不一定被父节点包围。
+        // 所以最安全的做法是只对完全确定不可见的子树剪枝。
+        
+        // 目前策略：继续遍历所有子节点，直到我们有世界包围盒（World Bounds）的概念。
+        // 简单的优化：如果父节点是容器（width=0, height=0），必须遍历。
+        // 如果父节点是 Sprite 且被剔除，且我们约定子节点在 Sprite 内部，则可以剪枝。
+        // 暂时保持全遍历，但在 isNodeVisible 里已经做了快速剔除。
+        
+        // 更好的优化：计算 Bounds。
+        
         for (const child of node.children) {
             this.renderNode(child);
         }

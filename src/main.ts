@@ -77,9 +77,10 @@ const tileLayer = new TileLayer(256, (x, y, z) => {
 }, 12);
 tileLayer.name = "MapLayer";
 engine.scene.addChild(tileLayer);
-
-// 2. Add a Container
-for (let i = 0; i < 10; i++) {
+    const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
+    const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
+    // 2. Add a Container
+for (let i = 0; i < 100; i++) {
     for (let j = 0; j < 100; j++) {
     const container = new Container(engine.renderer.gl);
     container.name = "MyContainer";
@@ -92,7 +93,6 @@ for (let i = 0; i < 10; i++) {
     engine.scene.addChild(container);
 
     // 3. Add Sprites with generated images
-    const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
     const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
     sprite1.transform.position = [50, 50];
     sprite1.width = 100;
@@ -101,7 +101,6 @@ for (let i = 0; i < 10; i++) {
     sprite1.name = "Sprite1";
     container.addChild(sprite1);
 
-    const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
     const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
     sprite2.transform.position = [200, 50];
     sprite2.width = 100;
