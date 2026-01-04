@@ -116,13 +116,35 @@ export class OutlineView {
         for (const [node, el] of this.renderedNodeMap) {
             this.applyNodeStyle(node, el);
         }
+
+        // 自动滚动到选中的节点
+        const selectedNode = this.auxLayer.selectedNode;
+        if (selectedNode) {
+            this.scrollToNode(selectedNode);
+        }
     }
 
     // --- Core Logic ---
+    
+    // 优化：DOM 元素复用池
+    private itemPool: HTMLElement[] = [];
+    
+    private getPooledItem(): HTMLElement {
+        if (this.itemPool.length > 0) {
+            return this.itemPool.pop()!;
+        }
+        return document.createElement('div');
+    }
+    
+    private recycleItem(el: HTMLElement) {
+        this.itemPool.push(el);
+    }
 
     // 1. Flatten the tree based on expanded state
     private rebuildList() {
         this.flattenList = [];
+        // 限制初始遍历深度或数量？不，这里必须遍历所有展开的。
+        // 对于 40,000 个节点，traverse 耗时约 5-10ms，尚可接受。
         this.traverse(this.rootNode, 0);
         
         // Update scroller height
@@ -131,7 +153,7 @@ export class OutlineView {
         
         this.renderVisibleItems();
     }
-
+    
     private traverse(node: Node, depth: number) {
         const hasChildren = node.children.length > 0;
         const isExpanded = this.expandedNodes.has(node);
@@ -149,23 +171,47 @@ export class OutlineView {
             }
         }
     }
-
+    
     // 2. Render only items in viewport
+    // 增加 requestAnimationFrame 防抖，避免 scroll 事件触发过于频繁
+    private pendingRender = false;
+    
     private renderVisibleItems() {
+        if (this.pendingRender) return;
+        this.pendingRender = true;
+        
+        requestAnimationFrame(() => {
+            this.pendingRender = false;
+            this.doRenderVisibleItems();
+        });
+    }
+
+    private doRenderVisibleItems() {
         const scrollTop = this.scrollContainer.scrollTop;
         const viewportHeight = this.scrollContainer.clientHeight;
         
         const startIndex = Math.floor(scrollTop / this.itemHeight);
         const endIndex = Math.min(
             this.flattenList.length, 
-            Math.ceil((scrollTop + viewportHeight) / this.itemHeight) + 1 // buffer
+            Math.ceil((scrollTop + viewportHeight) / this.itemHeight) + 1 
         );
 
         // Update item container position
         this.itemContainer.style.transform = `translateY(${startIndex * this.itemHeight}px)`;
         
-        // Clear current
-        this.itemContainer.innerHTML = '';
+        // Recycle existing items
+        // 简单策略：清空 container，将所有子元素放回池中
+        // 优化策略：Diff 比较？对于虚拟滚动，通常全量替换+复用更简单高效
+        
+        while (this.itemContainer.firstChild) {
+            const child = this.itemContainer.firstChild as HTMLElement;
+            // 清理事件监听器？由于我们每次都重新创建/绑定 onclick，
+            // 只要没有外部引用，GC 会处理。但在复用时需要小心。
+            // 简单的复用：只复用 div 容器，内容重填
+            this.itemContainer.removeChild(child);
+            this.recycleItem(child);
+        }
+        
         this.renderedNodeMap.clear();
 
         // Render subset
@@ -173,7 +219,7 @@ export class OutlineView {
             const itemData = this.flattenList[i];
             if (!itemData) continue;
             
-            const el = this.createItemDOM(itemData);
+            const el = this.createItemDOM(itemData); // 这里会从池中取
             this.itemContainer.appendChild(el);
             this.renderedNodeMap.set(itemData.node, el);
         }
@@ -181,8 +227,23 @@ export class OutlineView {
         this.updateHighlight();
     }
 
+    private toggleExpand(node: Node) {
+        if (this.expandedNodes.has(node)) {
+            this.expandedNodes.delete(node);
+        } else {
+            this.expandedNodes.add(node);
+        }
+        this.rebuildList();
+    }
+
     private createItemDOM(item: OutlineItem): HTMLElement {
-        const div = document.createElement('div');
+        const div = this.getPooledItem();
+        // 重置样式和内容
+        div.innerHTML = ''; // 清空旧内容
+        div.onclick = null;
+        div.onmouseover = null;
+        div.onmouseout = null;
+        
         div.style.height = `${this.itemHeight}px`;
         div.style.lineHeight = `${this.itemHeight}px`;
         div.style.paddingLeft = `${item.depth * 15 + 5}px`;
@@ -192,6 +253,8 @@ export class OutlineView {
         div.style.textOverflow = 'ellipsis';
         div.style.display = 'flex';
         div.style.alignItems = 'center';
+        div.style.color = '#cccccc'; // Default color reset
+        div.style.backgroundColor = 'transparent'; // Reset bg
 
         // Toggle Icon
         const toggleSpan = document.createElement('span');
@@ -262,13 +325,44 @@ export class OutlineView {
         }
     }
 
-    private toggleExpand(node: Node) {
-        if (this.expandedNodes.has(node)) {
-            this.expandedNodes.delete(node);
-        } else {
-            this.expandedNodes.add(node);
+    private scrollToNode(node: Node) {
+        // 1. 找到节点在 flattenList 中的索引
+        const index = this.flattenList.findIndex(item => item.node === node);
+        
+        // 如果节点不在列表中（可能是因为父节点折叠了），则展开父节点
+        if (index === -1) {
+            let current = node.parent;
+            let needsRebuild = false;
+            while (current && current !== this.rootNode) {
+                if (!this.expandedNodes.has(current)) {
+                    this.expandedNodes.add(current);
+                    needsRebuild = true;
+                }
+                current = current.parent;
+            }
+            if (needsRebuild) {
+                this.rebuildList();
+                // 递归再次调用，此时应该能找到了
+                this.scrollToNode(node);
+                return;
+            }
         }
-        this.rebuildList();
+        
+        // 再次查找索引（可能在 rebuild 后改变）
+        const newIndex = this.flattenList.findIndex(item => item.node === node);
+        if (newIndex === -1) return;
+
+        // 2. 计算目标滚动位置
+        const targetTop = newIndex * this.itemHeight;
+        
+        // 3. 检查是否在可视区域内
+        const scrollTop = this.scrollContainer.scrollTop;
+        const viewportHeight = this.scrollContainer.clientHeight;
+        
+        if (targetTop < scrollTop || targetTop > scrollTop + viewportHeight - this.itemHeight) {
+            // 滚动到该位置 (居中)
+            this.scrollContainer.scrollTop = targetTop - viewportHeight / 2 + this.itemHeight / 2;
+        }
     }
 
     /**

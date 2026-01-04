@@ -77,55 +77,98 @@ const tileLayer = new TileLayer(256, (x, y, z) => {
 }, 12);
 tileLayer.name = "MapLayer";
 engine.scene.addChild(tileLayer);
-    const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
-    const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
-    // 2. Add a Container
-for (let i = 0; i < 1000; i++) {
-    for (let j = 0; j < 100; j++) {
-    const container = new Container(engine.renderer.gl);
-    container.name = "MyContainer";
-    container.transform.position = [300 * i, 300 * j];
-    container.interactive = true;
-    container.width = 400;
-    container.height = 400;
+const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
+const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
+// 2. Add a Container
+// 使用分帧加载优化首屏卡顿 (Time Slicing)
+const totalRows = 100; // 恢复为 100 行 (共 10000 个容器)
+const totalCols = 100;
+const batchSize = 5; // 每帧处理 5 行
 
-    container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
-    engine.scene.addChild(container, true);
+let currentRow = 0;
 
-    // 3. Add Sprites with generated images
-    const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
-    sprite1.transform.position = [50, 50];
-    sprite1.width = 100;
-    sprite1.height = 100;
-    sprite1.interactive = true;
-    sprite1.name = "Sprite1";
-    container.addChild(sprite1, true);
+// 添加加载提示
+const loadingText = new Text("Loading Scene... 0%");
+loadingText.transform.position = [engine.renderer.width / 2 - 100, engine.renderer.height / 2];
+loadingText.fontSize = 40;
+loadingText.fillStyle = "blue";
+loadingText.name = "LoadingText";
+engine.scene.addChild(loadingText, true);
 
-    const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
-    sprite2.transform.position = [200, 50];
-    sprite2.width = 100;
-    sprite2.height = 100;
-    sprite2.interactive = true;
-    sprite2.name = "Sprite2";
-    container.addChild(sprite2, true);
+function loadBatch() {
+    const startRow = currentRow;
+    const endRow = Math.min(currentRow + batchSize, totalRows);
 
-    // 4. Add Text (Canvas2D)
-    const text = new Text("Hello WebGL + Canvas!");
-    text.transform.position = [50, 200];
-    text.fontSize = 30;
-    text.fillStyle = "red";
-    text.interactive = true;
-    text.name = "HelloText";
-    container.addChild(text, true);
+    for (let i = startRow; i < endRow; i++) {
+        for (let j = 0; j < totalCols; j++) {
+            const container = new Container(engine.renderer.gl);
+            container.name = "MyContainer";
+            container.transform.position = [300 * i, 300 * j];
+            container.interactive = true;
+            container.width = 400;
+            container.height = 400;
+
+            container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
+            // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
+            engine.scene.addChild(container, true);
+
+            // 3. Add Sprites with generated images
+            const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
+            sprite1.transform.position = [50, 50];
+            sprite1.width = 100;
+            sprite1.height = 100;
+            sprite1.interactive = true;
+            sprite1.name = "Sprite1";
+            container.addChild(sprite1, true);
+
+            const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
+            sprite2.transform.position = [200, 50];
+            sprite2.width = 100;
+            sprite2.height = 100;
+            sprite2.interactive = true;
+            sprite2.name = "Sprite2";
+            container.addChild(sprite2, true);
+
+            // 4. Add Text (Canvas2D)
+            const text = new Text("Hello WebGL + Canvas!");
+            text.transform.position = [50, 200];
+            text.fontSize = 30;
+            text.fillStyle = "red";
+            text.interactive = true;
+            text.name = "HelloText";
+            container.addChild(text, true);
+        }
     }
+
+    currentRow = endRow;
+
+    // 更新进度
+    const progress = Math.floor((currentRow / totalRows) * 100);
+    loadingText.text = `Loading Scene... ${progress}%`;
+    // 手动触发布局更新和重绘
+    loadingText.width = 0; // 强制重新测量
+    engine.scene.invalidate();
+
+    if (currentRow < totalRows) {
+            requestAnimationFrame(loadBatch);
+        } else {
+            console.log("Scene loading complete");
+            engine.scene.removeChild(loadingText);
+            
+            const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
+            instruction.transform.position = [20, 20];
+            instruction.fontSize = 16;
+            instruction.fillStyle = "black";
+            instruction.name = "Instructions";
+            engine.scene.addChild(instruction);
+
+            // 更新大纲视图
+            engine.outline.update();
+        }
 }
 
-const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
-instruction.transform.position = [20, 20];
-instruction.fontSize = 16;
-instruction.fillStyle = "black";
-instruction.name = "Instructions";
-engine.scene.addChild(instruction);
+// 启动分帧加载
+requestAnimationFrame(loadBatch);
 
 console.log("Engine started");
 
