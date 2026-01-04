@@ -80,7 +80,7 @@ engine.scene.addChild(tileLayer);
     const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
     const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
     // 2. Add a Container
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 1000; i++) {
     for (let j = 0; j < 100; j++) {
     const container = new Container(engine.renderer.gl);
     container.name = "MyContainer";
@@ -90,7 +90,7 @@ for (let i = 0; i < 100; i++) {
     container.height = 400;
 
     container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
-    engine.scene.addChild(container);
+    engine.scene.addChild(container, true);
 
     // 3. Add Sprites with generated images
     const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
@@ -99,7 +99,7 @@ for (let i = 0; i < 100; i++) {
     sprite1.height = 100;
     sprite1.interactive = true;
     sprite1.name = "Sprite1";
-    container.addChild(sprite1);
+    container.addChild(sprite1, true);
 
     const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
     sprite2.transform.position = [200, 50];
@@ -107,7 +107,7 @@ for (let i = 0; i < 100; i++) {
     sprite2.height = 100;
     sprite2.interactive = true;
     sprite2.name = "Sprite2";
-    container.addChild(sprite2);
+    container.addChild(sprite2, true);
 
     // 4. Add Text (Canvas2D)
     const text = new Text("Hello WebGL + Canvas!");
@@ -116,7 +116,7 @@ for (let i = 0; i < 100; i++) {
     text.fillStyle = "red";
     text.interactive = true;
     text.name = "HelloText";
-    container.addChild(text);
+    container.addChild(text, true);
     }
 }
 

@@ -54,7 +54,7 @@ export class Engine {
         this.interaction = new InteractionManager(this.renderer, this.scene, this.auxLayer);
 
         // 初始化调试用的大纲视图
-        this.outline = new OutlineView(this.scene, this.auxLayer);
+        this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer);
 
         // 初始化性能监控
         this.stats = new Stats();
