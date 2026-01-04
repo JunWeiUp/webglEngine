@@ -69,9 +69,11 @@ export class Text extends Node {
         ctx.textBaseline = "top";
         ctx.fillText(this.text, 0, 0);
         
-        // Measure text for hit testing / size
-        const metrics = ctx.measureText(this.text);
-        this.width = metrics.width;
-        this.height = this.fontSize; // Approx
+        // 仅在必要时（例如调试模式或内容变更）更新尺寸，
+        // 避免每帧 measureText。这里简化为不再每帧更新。
+        // 如果需要动态更新，应使用 setter + dirty flag。
+        // const metrics = ctx.measureText(this.text);
+        // this.width = metrics.width;
+        // this.height = this.fontSize; // Approx
     }
 }
