@@ -79,21 +79,16 @@ tileLayer.name = "MapLayer";
 engine.scene.addChild(tileLayer);
 
 // 2. Add a Container
-for (let i = 0; i < 10; i++) {
-    for (let j = 0; j < 10; j++) {
-    const container = new Container();
+for (let i = 0; i < 100; i++) {
+    for (let j = 0; j < 100; j++) {
+    const container = new Container(engine.renderer.gl);
     container.name = "MyContainer";
     container.transform.position = [300 * i, 300 * j];
     container.interactive = true;
     container.width = 400;
     container.height = 400;
 
-    const bg = new Sprite(engine.renderer.gl);
-    bg.width = 400;
-    bg.height = 400;
-    bg.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
-    bg.name = "ContainerBG";
-    container.addChild(bg);
+    container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
     engine.scene.addChild(container);
 
     // 3. Add Sprites with generated images
@@ -181,20 +176,15 @@ createButton("添加图片 (Sprite)", () => {
 
 // 2. Add Container Button
 createButton("添加容器 (Container)", () => {
-    const container = new Container();
+    const container = new Container(engine.renderer.gl);
     container.name = `Container_${Math.floor(Math.random() * 1000)}`;
     container.transform.position = [300 + Math.random() * 50, 300 + Math.random() * 50];
     container.interactive = true;
     container.width = 200;
     container.height = 200;
 
-    // Visual background
-    const bg = new Sprite(engine.renderer.gl);
-    bg.width = 200;
-    bg.height = 200;
-    bg.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
-    bg.name = "ContainerBG";
-    container.addChild(bg);
+    // Visual background set directly
+    container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
 
     engine.scene.addChild(container);
     console.log(`Created ${container.name}`);
