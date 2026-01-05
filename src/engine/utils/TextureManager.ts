@@ -3,15 +3,36 @@ import { Texture } from '../core/Texture';
 export class TextureManager {
     private static cache: Map<string, Texture> = new Map();
 
-    static loadTexture(gl: WebGLRenderingContext, url: string): Promise<Texture> {
+    static loadTexture(gl: WebGLRenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         if (this.cache.has(url)) {
             return Promise.resolve(this.cache.get(url)!);
         }
 
+        // Use modern fetch + createImageBitmap if available for off-main-thread decoding
+        if (typeof createImageBitmap !== 'undefined') {
+            return this.loadTextureBitmap(gl, url, signal);
+        }
+
         return new Promise((resolve, reject) => {
+            // Check if already aborted
+            if (signal?.aborted) {
+                return reject(new DOMException('Aborted', 'AbortError'));
+            }
+
             const image = new Image();
             image.crossOrigin = "Anonymous";
+
+            const onAbort = () => {
+                image.src = ''; // Cancel request if possible
+                reject(new DOMException('Aborted', 'AbortError'));
+            };
+
+            if (signal) {
+                signal.addEventListener('abort', onAbort);
+            }
+
             image.onload = () => {
+                if (signal) signal.removeEventListener('abort', onAbort);
                 const webglTex = this.createTextureFromSource(gl, image);
                 if (webglTex) {
                     const texture = new Texture(webglTex, image.width, image.height);
@@ -21,9 +42,38 @@ export class TextureManager {
                     reject(new Error("Failed to create texture"));
                 }
             };
-            image.onerror = (e) => reject(e);
+            image.onerror = (e) => {
+                if (signal) signal.removeEventListener('abort', onAbort);
+                reject(e);
+            };
             image.src = url;
         });
+    }
+
+    private static async loadTextureBitmap(gl: WebGLRenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
+        try {
+            const response = await fetch(url, { signal, mode: 'cors' });
+            if (!response.ok) throw new Error(`Failed to load texture: ${response.statusText}`);
+            
+            const blob = await response.blob();
+            const bitmap = await createImageBitmap(blob, {
+                premultiplyAlpha: 'premultiply', // Standard for WebGL
+                colorSpaceConversion: 'default'
+            });
+
+            const webglTex = this.createTextureFromSource(gl, bitmap);
+            if (webglTex) {
+                const texture = new Texture(webglTex, bitmap.width, bitmap.height);
+                this.cache.set(url, texture);
+                bitmap.close(); // Clean up bitmap memory
+                return texture;
+            } else {
+                 bitmap.close();
+                 throw new Error("Failed to create texture from bitmap");
+            }
+        } catch (error) {
+            throw error;
+        }
     }
 
     static createTextureFromSource(gl: WebGLRenderingContext, source: TexImageSource): WebGLTexture | null {
@@ -54,5 +104,20 @@ export class TextureManager {
         const texObj = new Texture(texture, 1, 1);
         this.cache.set(key, texObj);
         return texObj;
+    }
+
+    /**
+     * Dispose a texture by URL and remove from cache.
+     * This is crucial for LRU cache implementation to free GPU memory.
+     */
+    static disposeTexture(gl: WebGLRenderingContext, url: string) {
+        if (this.cache.has(url)) {
+            const texture = this.cache.get(url)!;
+            // Only dispose if it's not the white placeholder (which might be shared)
+            if (url !== "__white__") {
+                gl.deleteTexture(texture.baseTexture);
+                this.cache.delete(url);
+            }
+        }
     }
 }

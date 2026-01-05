@@ -72,43 +72,26 @@ export class InteractionManager {
      * 优先检测子节点（渲染顺序在上层的）
      */
     private hitTest(node: Node, point: vec2): Node | null {
-        // 优化：如果节点有尺寸且点不在世界包围盒内，且节点被认为是容器（包含子节点在内），则跳过子节点检测
-        // 注意：这里假设子节点在父节点尺寸范围内。如果子节点可能超出，则不能使用此优化。
-        // 对于本项目的 Container (400x400) 和 Sprite，这是一个安全的假设。
+        // 优化：利用缓存的 World AABB 进行快速剔除 (Fast Rejection)
         if (node.width > 0 && node.height > 0) {
-            // 简单的世界 AABB 检测
-            // 由于 Node 没有缓存 World AABB，我们需要计算
-            // 快速路径：计算点在局部空间的坐标
-            // Point_Local = Invert(WorldMatrix) * Point_World
-            // 如果 Point_Local 在 (0,0, w,h) 内，则命中 AABB (甚至 OBB)
-            
-            // 为了避免 mat3.invert 的高昂开销，我们是否可以做更粗略的检查？
-            // 不行，旋转后的矩形需要逆矩阵才能准确判断。
-            
-            // 既然必须计算逆矩阵来做准确的 hitTest，我们可以在这里做。
-            // 但是，hitTest(self) 是在 children 之后调用的。
-            // 我们需要 *提前* 判断是否可能命中 children。
-            
-            // 如果我们不计算逆矩阵，就无法准确判断点是否在旋转后的父节点内。
-            // 妥协：对于 20k 节点，我们必须减少递归。
-            // 让我们只对 *看起来像容器* 的节点做这个检查。
-            // Container 类通常有 children。
-            
-            if (node.children.length > 0) {
-                // 尝试计算逆矩阵
-                const invertMatrix = mat3.create();
-                mat3.invert(invertMatrix, node.transform.worldMatrix);
-                const localPoint = vec2.create();
-                vec2.transformMat3(localPoint, point, invertMatrix);
-                
-                // 如果点在局部 bounds 外，我们跳过子节点遍历
-                // 假设：所有可交互子节点都在父节点 bounds 内
-                if (localPoint[0] < 0 || localPoint[0] > node.width ||
-                    localPoint[1] < 0 || localPoint[1] > node.height) {
+            // 如果节点有 AABB 缓存，先检查点是否在 AABB 内
+            if (node.worldAABB) {
+                const aabb = node.worldAABB;
+                // 注意：AABB 只能用于剔除！
+                // 因为旋转后的矩形的 AABB 比实际矩形大。
+                // 如果点不在 AABB 内，则一定不在矩形内 (Safe Rejection)。
+                if (point[0] < aabb.x || point[0] > aabb.x + aabb.width ||
+                    point[1] < aabb.y || point[1] > aabb.y + aabb.height) {
                     return null;
                 }
             }
         }
+        
+        // 如果是容器节点（如 Container），我们需要判断是否可能命中其子节点
+        // 之前的逻辑是：如果点不在容器的局部范围内，就跳过子节点。
+        // 但这假设子节点都在父节点范围内。对于 Container 这是一个约定。
+        // 既然我们有了 AABB，我们可以检查子节点的 AABB（如果子节点更新了 AABB）。
+        // 但这里我们还是用递归的方式。
 
         // 倒序遍历子节点，保证先点击到上层物体
         for (let i = node.children.length - 1; i >= 0; i--) {
@@ -117,8 +100,12 @@ export class InteractionManager {
             if (hit) return hit;
         }
 
-        if (node.interactive && node.hitTest(point)) {
-            return node;
+        if (node.interactive) {
+             // 精确检测 (Exact Hit Test)
+             // 只有通过了上面的 AABB 剔除，才会执行这里的矩阵逆变换
+             if (node.hitTest(point)) {
+                 return node;
+             }
         }
 
         return null;

@@ -1,6 +1,7 @@
 import { mat3, vec2 } from 'gl-matrix';
 import { Transform } from '../core/Transform';
 import type { IRenderer } from '../core/IRenderer';
+import type { Rect } from '../core/Rect';
 
 /**
  * Node 类
@@ -21,12 +22,19 @@ export class Node {
     /** 高度 (用于包围盒/点击检测) */
     public height: number = 0;
 
+    /** 
+     * 世界坐标系下的 AABB 包围盒 (缓存用于快速剔除)
+     * 在 updateTransform 中更新
+     */
+    public worldAABB: Rect | null = null;
+
     /** 是否可交互 (接收鼠标事件) */
     public interactive: boolean = false;
     /** 是否被鼠标悬停 */
     public isHovered: boolean = false;
     /** 是否被选中 */
     public isSelected: boolean = false;
+
 
     /** 节点名称 (调试用) */
     public name: string = "Node";
@@ -91,43 +99,21 @@ export class Node {
      */
     updateTransform(parentWorldMatrix: mat3 | null, parentDirty: boolean = false) {
         // 1. 更新自身的局部矩阵 (如果 dirty)
-        this.transform.updateLocalTransform();
-
-        // 2. 决定是否需要更新世界矩阵
-        // 如果父节点变了，或者自己变了，就需要重新计算世界矩阵
-        // 注意：transform.version 在 updateLocalTransform 后可能改变
-        // 这里简化判断：如果 local 刚更新过 (dirty was true -> version changed) 或 parentDirty
-
-        // 由于 transform.dirty 在 updateLocalTransform 后被重置，我们需要一种机制知道刚才是否更新了
-        // 或者简单地：
-
-        let worldDirty = parentDirty;
-        // 检查局部是否刚被更新 (实际上我们应该在 Transform 里维护一个 worldDirty 标记更合适，但这里先这样)
-        // 简单的优化：如果 localMatrix 没变且 parentMatrix 没变，就不需要重算 worldMatrix
-
-        // 但由于 updateLocalTransform 内部消化了 dirty，外部难以直接判断。
-        // 改进：我们假设每帧调用 updateTransform。
-        // 如果 transform.version 变了，说明 local 变了。
-        // 我们需要记录上一次计算时的 version。
-
-        if (parentDirty || this.transform.version !== this.transform.parentVersion) {
-            this.transform.updateWorldTransform(parentWorldMatrix);
-            this.transform.parentVersion = this.transform.version; // Hack: 复用字段或新增字段记录 lastVersion
-            // 实际上 Transform 类里 parentVersion 还没被利用起来，这里暂且假设每次都算，或者需要更严谨的 Version 控制
-            // 为了稳妥，先保持 updateWorldTransform 的调用，依靠 Transform 内部优化（如果有）
-            // 鉴于 Transform.updateWorldTransform 目前是纯计算，我们可以做一个简单的优化：
-
-            // 真正的优化：
-            // worldDirty = parentDirty || this.transform.dirty (在 updateLocal 之前判断)
-        }
-
-        // 重新实现：
         const localDirty = this.transform.dirty;
         this.transform.updateLocalTransform(); // 会清除 dirty
+
+        let worldDirty = parentDirty;
 
         if (localDirty || parentDirty) {
             this.transform.updateWorldTransform(parentWorldMatrix);
             worldDirty = true;
+            
+            // 2. 更新 World AABB (如果节点有尺寸)
+            if (this.width > 0 && this.height > 0) {
+                this.updateWorldAABB();
+            } else {
+                this.worldAABB = null;
+            }
         }
 
         // 3. 递归更新所有子节点
@@ -136,6 +122,54 @@ export class Node {
         for (const child of this.children) {
             child.updateTransform(this.transform.worldMatrix, worldDirty);
         }
+    }
+
+    /**
+     * 更新世界 AABB
+     */
+    private updateWorldAABB() {
+        const m = this.transform.worldMatrix;
+        const w = this.width;
+        const h = this.height;
+
+        // 计算四个角的世界坐标
+        // x' = x*m00 + y*m10 + m20
+        // y' = x*m01 + y*m11 + m21
+        
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        
+        // 优化：不再创建数组，直接计算
+        // 0,0
+        let wx = m[6];
+        let wy = m[7];
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+
+        // w,0
+        wx = w * m[0] + m[6];
+        wy = w * m[1] + m[7];
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+
+        // 0,h
+        wx = h * m[3] + m[6];
+        wy = h * m[4] + m[7];
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+
+        // w,h
+        wx = w * m[0] + h * m[3] + m[6];
+        wy = w * m[1] + h * m[4] + m[7];
+        if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+        if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+
+        if (!this.worldAABB) {
+            this.worldAABB = { x: 0, y: 0, width: 0, height: 0 };
+        }
+        this.worldAABB.x = minX;
+        this.worldAABB.y = minY;
+        this.worldAABB.width = maxX - minX;
+        this.worldAABB.height = maxY - minY;
     }
 
     /**

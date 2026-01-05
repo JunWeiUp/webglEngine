@@ -22,9 +22,9 @@ export class TileLayer extends Node {
     public tileSourceProvider: (x: number, y: number, z: number) => TileSource;
     
     // 缓存纹理
-    private tileTextures: Map<string, WebGLTexture> = new Map();
-    // 正在加载的集合
-    private loading: Set<string> = new Set();
+    private tileTextures: Map<string, { texture: WebGLTexture, lastUsedTime: number, url?: string }> = new Map();
+    // 正在加载的集合 (支持取消)
+    private loading: Map<string, AbortController> = new Map();
 
     // --- 共享渲染数据 (GC 优化) ---
     private static sharedColor: Float32Array = new Float32Array([1, 1, 1, 1]);
@@ -35,6 +35,11 @@ export class TileLayer extends Node {
         1, 1, // BR
         0, 1  // BL
     ]);
+
+    // LRU 配置
+    private static MAX_TILES = 200; // 最大缓存瓦片数
+    private static GC_INTERVAL = 60; // GC 间隔帧数
+    private gcFrameCount = 0;
 
     constructor(tileSize: number, tileSourceProvider: (x: number, y: number, z: number) => TileSource, baseZoom: number = 12) {
         super();
@@ -94,6 +99,7 @@ export class TileLayer extends Node {
 
         // 3. 渲染瓦片
         const gl = renderer.gl;
+        const visibleKeys = new Set<string>();
 
         // 范围限制安全检查 (现在不太可能触发)
         if ((endX - startX) * (endY - startY) > 2500) {
@@ -105,27 +111,47 @@ export class TileLayer extends Node {
             for (let y = startY; y < endY; y++) {
                 // Key 需要包含缩放级别！
                 const key = `${effectiveZoom}:${x},${y}`;
-                const source = this.tileSourceProvider(x, y, effectiveZoom);
-
+                visibleKeys.add(key);
+                
                 // 按需加载
                 if (!this.tileTextures.has(key)) {
                     if (!this.loading.has(key)) {
-                        this.loading.add(key);
+                        const controller = new AbortController();
+                        this.loading.set(key, controller);
+                        
+                        const source = this.tileSourceProvider(x, y, effectiveZoom);
 
-                        const handleTexture = (tex: WebGLTexture) => {
-                            this.tileTextures.set(key, tex);
-                            this.loading.delete(key);
-                            this.invalidate(); // 瓦片加载完成，请求重绘
+                        const handleTexture = (tex: WebGLTexture, url?: string) => {
+                            if (this.loading.has(key)) { // 检查是否已被取消
+                                this.tileTextures.set(key, { 
+                                    texture: tex, 
+                                    lastUsedTime: performance.now(),
+                                    url: url 
+                                });
+                                this.loading.delete(key);
+                                this.invalidate(); // 瓦片加载完成，请求重绘
+                            } else {
+                                // 已经被取消但加载完成了
+                                if (!url) {
+                                    // 如果是动态生成的纹理，需要手动释放
+                                    gl.deleteTexture(tex);
+                                }
+                                // 如果是 URL 纹理，TextureManager 会处理（或者已经在 LRU 中被处理）
+                            }
                         };
 
                         if (typeof source === 'string') {
-                            // URL 模式
-                            TextureManager.loadTexture(gl, source).then(handleTexture).catch(() => {
-                                this.loading.delete(key);
-                            });
+                            // URL 模式 (支持取消)
+                            TextureManager.loadTexture(gl, source, controller.signal)
+                                .then(t => handleTexture(t.baseTexture, source))
+                                .catch((e) => {
+                                    if (e.name !== 'AbortError') {
+                                        // console.warn(e);
+                                    }
+                                    this.loading.delete(key);
+                                });
                         } else if (source instanceof HTMLCanvasElement || (source as any).tagName === 'CANVAS') {
                             // 直接 Canvas 模式 (同步)
-                            // 增加 tagName 检查以增强鲁棒性
                             const tex = TextureManager.createTextureFromSource(gl, source as HTMLCanvasElement);
                             if (tex) {
                                 handleTexture(tex);
@@ -135,6 +161,7 @@ export class TileLayer extends Node {
                         } else if (source instanceof Promise) {
                             // Promise<HTMLCanvasElement> 模式
                             source.then(canvas => {
+                                if (controller.signal.aborted) return;
                                 const tex = TextureManager.createTextureFromSource(gl, canvas);
                                 if (tex) {
                                     handleTexture(tex);
@@ -149,7 +176,9 @@ export class TileLayer extends Node {
                     continue;
                 }
 
-                const texture = this.tileTextures.get(key)!;
+                const tileInfo = this.tileTextures.get(key)!;
+                tileInfo.lastUsedTime = performance.now(); // 更新最后使用时间
+                const texture = tileInfo.texture;
                 
                 // --- 计算瓦片的世界坐标 (用于批处理) ---
                 // 瓦片在局部空间的位置
@@ -193,8 +222,50 @@ export class TileLayer extends Node {
                     TileLayer.sharedUVs,
                     TileLayer.sharedColor
                 );
-                // console.log("key", key);
             }
+        }
+
+        // 4. 取消不可见区域的正在加载任务
+        for (const [key, controller] of this.loading) {
+            if (!visibleKeys.has(key)) {
+                controller.abort();
+                this.loading.delete(key);
+            }
+        }
+
+        // 5. 执行 GC (LRU)
+        this.gcFrameCount++;
+        if (this.gcFrameCount > TileLayer.GC_INTERVAL) {
+            this.gcFrameCount = 0;
+            this.performGC(gl);
+        }
+    }
+
+    /**
+     * 执行瓦片垃圾回收
+     */
+    private performGC(gl: WebGLRenderingContext) {
+        if (this.tileTextures.size <= TileLayer.MAX_TILES) return;
+
+        // 按最后使用时间排序
+        const entries = Array.from(this.tileTextures.entries());
+        entries.sort((a, b) => a[1].lastUsedTime - b[1].lastUsedTime);
+
+        // 删除最旧的瓦片
+        const toRemoveCount = this.tileTextures.size - TileLayer.MAX_TILES + 20; // 每次多删一点，避免频繁 GC
+        
+        for (let i = 0; i < toRemoveCount && i < entries.length; i++) {
+            const [key, info] = entries[i];
+            
+            if (info.url) {
+                // 如果是 URL 加载的，通知 TextureManager 释放
+                TextureManager.disposeTexture(gl, info.url);
+            } else {
+                // 如果是动态生成的，直接删除纹理
+                gl.deleteTexture(info.texture);
+            }
+            
+            this.tileTextures.delete(key);
         }
     }
 }

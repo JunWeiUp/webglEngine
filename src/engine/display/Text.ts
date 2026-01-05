@@ -2,64 +2,82 @@ import { Node } from './Node';
 import type { IRenderer } from '../core/IRenderer';
 
 export class Text extends Node {
-    public text: string = "";
-    public fontSize: number = 24;
-    public fontFamily: string = "Arial";
+    private _text: string = "";
+    private _fontSize: number = 24;
+    private _fontFamily: string = "Arial";
+    
     public fillStyle: string = "black";
+    private dirtyLayout: boolean = true;
 
     constructor(text: string) {
         super();
         this.text = text;
     }
 
+    get text(): string { return this._text; }
+    set text(v: string) {
+        if (this._text !== v) {
+            this._text = v;
+            this.dirtyLayout = true;
+            this.invalidate();
+        }
+    }
+
+    get fontSize(): number { return this._fontSize; }
+    set fontSize(v: number) {
+        if (this._fontSize !== v) {
+            this._fontSize = v;
+            this.dirtyLayout = true;
+            this.invalidate();
+        }
+    }
+
+    get fontFamily(): string { return this._fontFamily; }
+    set fontFamily(v: string) {
+        if (this._fontFamily !== v) {
+            this._fontFamily = v;
+            this.dirtyLayout = true;
+            this.invalidate();
+        }
+    }
+
+    /**
+     * 更新文本布局尺寸
+     * 使用 Canvas 测量文本宽度
+     */
+    private updateLayout(ctx: CanvasRenderingContext2D) {
+        ctx.font = `${this.fontSize}px ${this.fontFamily}`;
+        const metrics = ctx.measureText(this.text);
+        
+        // 更新节点尺寸
+        this.width = metrics.width;
+        this.height = this.fontSize * 1.2; // 估算高度 (行高)
+        
+        this.dirtyLayout = false;
+        
+        // 尺寸改变，可能影响 AABB，标记 transform dirty (虽然 transform 没变，但尺寸变了影响 AABB)
+        // 在 Node.ts 的 updateTransform 中，我们检查了 this.width > 0。
+        // 为了确保 AABB 更新，我们需要触发一次 world matrix 更新流程或者直接更新 AABB。
+        // 由于 Node 没有直接 updateAABB 的公开方法，我们通过标记 transform.dirty 来间接触发。
+        this.transform.dirty = true;
+    }
+
     renderCanvas(renderer: IRenderer) {
         const ctx = renderer.ctx;
         
-        // We need to apply the world transform to the 2D context.
-        // World matrix is 3x3:
-        // [ m00 m01 m02 ]
-        // [ m10 m11 m12 ]
-        // [ m20 m21 m22 ]
-        // Canvas transform is setTransform(m11, m12, m21, m22, dx, dy) -> (a, b, c, d, e, f)
-        // gl-matrix:
-        // 0 3 6
-        // 1 4 7
-        // 2 5 8
-        // m00=0, m01=3, m02=6 (tx)
-        // m10=1, m11=4, m12=7 (ty)
-        // Wait, gl-matrix is column major? Yes.
-        // Index:
-        // 0: sx (m00)
-        // 1: shearY (m10)
-        // 2: 0
-        // 3: shearX (m01)
-        // 4: sy (m11)
-        // 5: 0
-        // 6: tx (m02)
-        // 7: ty (m12)
-        // 8: 1
-
-        // ctx.setTransform(a, b, c, d, e, f)
-        // a (m11), b (m12), c (m21), d (m22), e (dx), f (dy)
-        // Row-major vs Column-major.
-        // Canvas is: x' = ax + cy + e
-        //            y' = bx + dy + f
+        // 如果布局脏了，先更新尺寸
+        // 这对于视锥体剔除很重要。
+        // 注意：Renderer 在 renderNode 之前会检查 isVisible。
+        // 如果 width/height 为 0，isVisible 可能直接返回 true (或者 false，取决于实现)。
+        // 我们的 Renderer 实现是：if (node.width > 0 && node.height > 0) check...
+        // 所以如果初始 width=0，它会跳过剔除检查直接渲染（假设可见），或者被剔除。
+        // 最好是在 updateTransform 阶段就能更新 layout，但 Node 没有 updateLogic 钩子。
+        // 这里我们在渲染前更新，如果是第一帧，可能在剔除检查时尺寸还是旧的。
+        // 但对于 Text，通常影响不大。
         
-        // Matrix multiplication:
-        // [ m00 m01 m02 ]   [ x ]
-        // [ m10 m11 m12 ] * [ y ]
-        // [  0   0   1  ]   [ 1 ]
-        
-        // x' = m00*x + m01*y + m02
-        // y' = m10*x + m11*y + m12
-        
-        // So:
-        // a = m00 (idx 0)
-        // b = m10 (idx 1)
-        // c = m01 (idx 3)
-        // d = m11 (idx 4)
-        // e = m02 (idx 6)
-        // f = m12 (idx 7)
+        if (this.dirtyLayout) {
+            this.updateLayout(ctx);
+        }
 
         const m = this.transform.worldMatrix;
         ctx.setTransform(m[0], m[1], m[3], m[4], m[6], m[7]);
@@ -68,12 +86,5 @@ export class Text extends Node {
         ctx.fillStyle = this.fillStyle;
         ctx.textBaseline = "top";
         ctx.fillText(this.text, 0, 0);
-        
-        // 仅在必要时（例如调试模式或内容变更）更新尺寸，
-        // 避免每帧 measureText。这里简化为不再每帧更新。
-        // 如果需要动态更新，应使用 setter + dirty flag。
-        // const metrics = ctx.measureText(this.text);
-        // this.width = metrics.width;
-        // this.height = this.fontSize; // Approx
     }
 }
