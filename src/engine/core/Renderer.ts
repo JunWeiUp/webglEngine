@@ -186,7 +186,7 @@ export class Renderer {
     }
 
     /**
-     * 渲染整个场景
+     * 渲染整个场景 (WebGL)
      * @param scene 场景根节点
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
@@ -239,6 +239,36 @@ export class Renderer {
         this.flush();
 
         // 恢复 2D Context 状态
+        if (dirtyRect) {
+            this.ctx.restore();
+        }
+    }
+
+    /**
+     * 清除 2D Canvas (用于辅助图层)
+     * @param dirtyRect 脏矩形
+     */
+    public clearCanvas2D(dirtyRect?: Rect) {
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
+        
+        if (dirtyRect) {
+            // 局部清除
+            this.ctx.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+            // 设置 2D Context 裁剪，防止 Canvas 绘制溢出脏矩形
+            this.ctx.save();
+            this.ctx.beginPath();
+            this.ctx.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+            this.ctx.clip();
+        } else {
+            // 全屏清除
+            this.ctx.clearRect(0, 0, this.width, this.height);
+        }
+    }
+
+    /**
+     * 恢复 2D Canvas 状态 (对应 clearCanvas2D 的 clip)
+     */
+    public restoreCanvas2D(dirtyRect?: Rect) {
         if (dirtyRect) {
             this.ctx.restore();
         }

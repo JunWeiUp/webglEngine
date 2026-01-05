@@ -1,5 +1,6 @@
 import { Node } from './Node';
 import { mat3, vec2 } from 'gl-matrix';
+import type { Rect } from '../core/Rect';
 
 export class AuxiliaryLayer {
     public hoveredNode: Node | null = null;
@@ -31,7 +32,7 @@ export class AuxiliaryLayer {
 
     constructor() {}
 
-    render(ctx: CanvasRenderingContext2D, scene: Node) {
+    render(ctx: CanvasRenderingContext2D, scene: Node, dirtyRect?: Rect) {
         // Reset transform to identity to draw in screen space
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -39,24 +40,24 @@ export class AuxiliaryLayer {
         // Iterate over all selected nodes
         for (const node of this.selectedNodes) {
              if (node !== this.draggingNode) {
-                 this.drawBounds(ctx, node, '#0000ff', 2);
+                 this.drawBounds(ctx, node, '#0000ff', 2, false, dirtyRect);
              }
         }
 
         // 2. Draw Hover
         if (this.hoveredNode && !this.selectedNodes.has(this.hoveredNode) && this.hoveredNode !== this.draggingNode) {
-            this.drawBounds(ctx, this.hoveredNode, '#ffff00', 2);
+            this.drawBounds(ctx, this.hoveredNode, '#ffff00', 2, false, dirtyRect);
         }
 
         // 3. Draw Dragging Logic
         if (this.draggingNode) {
             // Draw Target Highlight (where we will drop)
             if (this.dragTargetNode) {
-                this.drawBounds(ctx, this.dragTargetNode, '#00ff00', 3, true);
+                this.drawBounds(ctx, this.dragTargetNode, '#00ff00', 3, true, dirtyRect);
                 
                 // Optional: Draw text saying "Drop here"
                 const bounds = this.getScreenBounds(this.dragTargetNode);
-                if (bounds) {
+                if (bounds && this.rectIntersects(bounds, dirtyRect)) {
                     ctx.fillStyle = '#00ff00';
                     ctx.font = '12px Arial';
                     ctx.fillText(`Drop into: ${this.dragTargetNode.name}`, bounds.minX, bounds.minY - 5);
@@ -64,7 +65,7 @@ export class AuxiliaryLayer {
             }
 
             // Draw Selection for Dragging Node (since it moves with mouse now)
-            this.drawBounds(ctx, this.draggingNode, '#0000ff', 2);
+            this.drawBounds(ctx, this.draggingNode, '#0000ff', 2, false, dirtyRect);
         }
         
         // 4. Draw Selection Box
@@ -77,17 +78,33 @@ export class AuxiliaryLayer {
             const w = Math.abs(end[0] - start[0]);
             const h = Math.abs(end[1] - start[1]);
             
-            // Fill
-            ctx.fillStyle = 'rgba(0, 100, 255, 0.2)';
-            ctx.fillRect(x, y, w, h);
-            
-            // Border
-            ctx.strokeStyle = 'rgba(0, 100, 255, 0.8)';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([3, 3]);
-            ctx.strokeRect(x, y, w, h);
-            ctx.setLineDash([]);
+            // Check intersection
+            if (!dirtyRect || (
+                x < dirtyRect.x + dirtyRect.width &&
+                x + w > dirtyRect.x &&
+                y < dirtyRect.y + dirtyRect.height &&
+                y + h > dirtyRect.y
+            )) {
+                // Fill
+                ctx.fillStyle = 'rgba(0, 100, 255, 0.2)';
+                ctx.fillRect(x, y, w, h);
+                
+                // Border
+                ctx.strokeStyle = 'rgba(0, 100, 255, 0.8)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 3]);
+                ctx.strokeRect(x, y, w, h);
+                ctx.setLineDash([]);
+            }
         }
+    }
+
+    private rectIntersects(bounds: { minX: number, minY: number, maxX: number, maxY: number }, dirtyRect?: Rect): boolean {
+        if (!dirtyRect) return true;
+        return !(bounds.minX > dirtyRect.x + dirtyRect.width ||
+                 bounds.maxX < dirtyRect.x ||
+                 bounds.minY > dirtyRect.y + dirtyRect.height ||
+                 bounds.maxY < dirtyRect.y);
     }
 
     private getGlobalScale(node: Node): number {
@@ -120,9 +137,14 @@ export class AuxiliaryLayer {
         return { minX, minY, maxX, maxY };
     }
 
-    private drawBounds(ctx: CanvasRenderingContext2D, node: Node, color: string, lineWidth: number, dashed: boolean = false) {
+    private drawBounds(ctx: CanvasRenderingContext2D, node: Node, color: string, lineWidth: number, dashed: boolean = false, dirtyRect?: Rect) {
         const bounds = this.getScreenBounds(node);
         if (!bounds) return;
+
+        // Culling
+        if (dirtyRect && !this.rectIntersects(bounds, dirtyRect)) {
+            return;
+        }
 
         ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;

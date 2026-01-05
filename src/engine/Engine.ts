@@ -25,7 +25,6 @@ export class Engine {
     public interaction: InteractionManager;
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
-    public stats: Stats;
     public alwaysRender: boolean = false;
 
     // 渲染请求 ID (防抖动)
@@ -61,12 +60,6 @@ export class Engine {
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer);
 
-        // 初始化性能监控
-        this.stats = new Stats();
-        this.stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
-        this.stats.dom.style.left = '250px'; // 避开大纲视图
-        document.body.appendChild(this.stats.dom);
-
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
@@ -96,7 +89,7 @@ export class Engine {
         this.requestRender();
 
        let  perfMonitor = new PerfMonitor();
-       perfMonitor.start(this.stats.dom);
+       perfMonitor.start(container);
     }
 
     /**
@@ -162,24 +155,22 @@ export class Engine {
      * 单帧渲染逻辑
      */
     private loop() {
-        this.stats.begin();
-
         // 确定渲染区域
         const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
 
-        // 渲染 WebGL 场景
+        // 1. 清除 2D Canvas (包括 Text 和 AuxLayer 共用的 Canvas)
+        // 必须在绘制 Text 之前清除，否则会覆盖 Text
+        this.renderer.clearCanvas2D(renderRect);
+
+        // 2. 渲染 WebGL 场景 (包括 WebGL 内容和 Canvas Text 内容)
+        // Renderer.render 内部负责 WebGL 的 clear
         this.renderer.render(this.scene, renderRect);
         
-        // 渲染辅助图层 (Canvas 2D Overlay)
-        // 辅助图层通常是全屏的，但如果有 renderRect，我们可以尝试裁剪？
-        // AuxiliaryLayer 的 render 方法目前是全屏绘制。
-        // 为了简单，我们让 AuxLayer 也支持裁剪，或者直接全绘（2D Canvas 开销较小）。
-        // 但 Renderer.render 已经设置了 Scissor/Clip。
-        // 所以 AuxLayer 绘制的内容也会被 Clip。
-        // 这意味着 AuxLayer 必须能够重绘它在 dirtyRect 内的部分。
-        this.auxLayer.render(this.renderer.ctx, this.scene);
-
-        this.stats.end();
+        // 3. 绘制辅助内容 (传入 renderRect 以进行剔除优化)
+        this.auxLayer.render(this.renderer.ctx, this.scene, renderRect);
+        
+        // 4. 恢复 2D 状态 (clip)
+        this.renderer.restoreCanvas2D(renderRect);
 
         // 重置脏状态
         this.fullInvalidate = false;
