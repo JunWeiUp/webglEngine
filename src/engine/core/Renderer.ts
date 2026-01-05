@@ -24,6 +24,9 @@ export class Renderer {
     private currentQuadCount: number = 0;   // 当前已填充的 Quad 数量
     private textureSlots: WebGLTexture[] = []; // 当前批次使用的纹理槽
     
+    // 静态常量，避免每次 flush 创建新数组
+    private static readonly TEXTURE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7];
+
     private dynamicVertexBuffer: WebGLBuffer | null = null; // 动态顶点缓冲区（GPU）
     private indexBuffer: WebGLBuffer | null = null;         // 静态索引缓冲区（GPU）
 
@@ -204,7 +207,7 @@ export class Renderer {
                 const y = Math.max(0, scissorY);
                 const w = Math.min(this.width - x, dirtyRect.width);
                 const h = Math.min(this.height - y, dirtyRect.height);
-                
+                console.log("dirtyRect", x, y, w, h);
                 this.gl.scissor(x, y, w, h);
             } else {
                 this.gl.disable(this.gl.SCISSOR_TEST);
@@ -406,8 +409,7 @@ export class Renderer {
         // 设置 u_textures uniform 数组
         const uTexturesLocation = gl.getUniformLocation(program, "u_textures");
         if (uTexturesLocation) {
-             const textureIndices = [0, 1, 2, 3, 4, 5, 6, 7];
-             gl.uniform1iv(uTexturesLocation, textureIndices);
+             gl.uniform1iv(uTexturesLocation, Renderer.TEXTURE_INDICES);
         }
 
         // 设置投影矩阵

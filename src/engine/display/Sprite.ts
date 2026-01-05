@@ -15,8 +15,19 @@ export class Sprite extends Node {
     public texture: Texture | null = null;
     /** 纹理图片的 URL */
     public textureUrl: string = "";
+    
+    // --- 颜色属性优化 ---
+    // 默认使用静态共享的白色，直到用户修改
+    private static readonly DEFAULT_COLOR = new Float32Array([1, 1, 1, 1]);
+    private _color: Float32Array = Sprite.DEFAULT_COLOR;
+
     /** 颜色叠加/混合 (RGBA) */
-    public color: Float32Array = new Float32Array([1, 1, 1, 1]);
+    public get color(): Float32Array {
+        return this._color;
+    }
+    public set color(value: Float32Array) {
+        this._color = value;
+    }
 
     // --- 渲染优化共享缓冲区 (静态) ---
     // 避免每帧创建新数组

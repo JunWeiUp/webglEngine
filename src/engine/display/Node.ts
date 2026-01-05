@@ -173,17 +173,24 @@ export class Node {
     }
 
     /**
+     * 静态共享变量，用于减少 hitTest 中的 GC
+     */
+    private static sharedMat3: mat3 = mat3.create();
+    private static sharedVec2: vec2 = vec2.create();
+
+    /**
      * 点击检测
      * 判断给定的世界坐标点是否在节点范围内
      * @param worldPoint 世界坐标点
      * @returns 是否命中
      */
     hitTest(worldPoint: vec2): boolean {
-        // 计算世界矩阵的逆矩阵，将世界坐标转为局部坐标
-        const invertMatrix = mat3.create();
+        // 使用共享变量计算世界矩阵的逆矩阵
+        const invertMatrix = Node.sharedMat3;
         mat3.invert(invertMatrix, this.transform.worldMatrix);
 
-        const localPoint = vec2.create();
+        // 使用共享变量存储局部坐标
+        const localPoint = Node.sharedVec2;
         vec2.transformMat3(localPoint, worldPoint, invertMatrix);
 
         // 简单的 AABB 检测 (假设锚点在左上角 0,0)
