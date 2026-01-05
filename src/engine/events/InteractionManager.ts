@@ -3,6 +3,7 @@ import { Renderer } from '../core/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
 import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
 import { QuadTree, type Rect } from '../utils/QuadTree';
+import type { Engine } from '../Engine';
 
 /**
  * 交互管理器
@@ -15,6 +16,7 @@ import { QuadTree, type Rect } from '../utils/QuadTree';
  * 5. 场景的平移 (Panning) 和 缩放 (Zooming)
  */
 export class InteractionManager {
+    private engine: Engine;
     private renderer: Renderer;
     private scene: Node;
     private auxLayer: AuxiliaryLayer;
@@ -36,7 +38,8 @@ export class InteractionManager {
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
 
-    constructor(renderer: Renderer, scene: Node, auxLayer: AuxiliaryLayer) {
+    constructor(engine: Engine, renderer: Renderer, scene: Node, auxLayer: AuxiliaryLayer) {
+        this.engine = engine;
         this.renderer = renderer;
         this.scene = scene;
         this.auxLayer = auxLayer;
@@ -216,6 +219,39 @@ export class InteractionManager {
     }
 
     /**
+     * 计算节点的屏幕 AABB (用于局部刷新)
+     */
+    private getNodeScreenBounds(node: Node | null): Rect | null {
+        if (!node) return null;
+        if (node === this.scene) return { x: 0, y: 0, width: this.renderer.width, height: this.renderer.height };
+
+        const corners = [
+            vec2.fromValues(0, 0),
+            vec2.fromValues(node.width, 0),
+            vec2.fromValues(node.width, node.height),
+            vec2.fromValues(0, node.height)
+        ];
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        for (const p of corners) {
+            const screen = vec2.create();
+            vec2.transformMat3(screen, p, node.transform.worldMatrix);
+            minX = Math.min(minX, screen[0]);
+            minY = Math.min(minY, screen[1]);
+            maxX = Math.max(maxX, screen[0]);
+            maxY = Math.max(maxY, screen[1]);
+        }
+
+        return {
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        };
+    }
+
+    /**
      * 鼠标移动事件处理
      */
     private onMouseMove(e: MouseEvent) {
@@ -250,10 +286,30 @@ export class InteractionManager {
         if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
             const hit = this.hitTest(this.scene, pos);
             if (this.auxLayer.hoveredNode !== hit) {
+                // 优化：仅重绘变脏的区域 (旧高亮节点 + 新高亮节点)
+                const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
+                
                 this.auxLayer.hoveredNode = hit;
+                
+                const newBounds = this.getNodeScreenBounds(hit);
+
                 if (this.onHoverChange) this.onHoverChange();
                 this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
-                needsRender = true; // 悬停状态改变，重绘
+                
+                // 提交脏矩形
+                if (oldBounds) this.engine.invalidateArea(oldBounds);
+                if (newBounds) this.engine.invalidateArea(newBounds);
+                
+                // 如果没有脏矩形 (例如从空白移到空白)，无需重绘
+                // 但 onHoverChange 可能会更新 OutlineView
+                // OutlineView.updateHighlight() 仅改变 DOM 样式，不需要 WebGL 重绘
+                // 所以不需要 scene.invalidate()
+
+                // 注意：invalidateArea 内部会调用 requestRender，所以这里不需要 needsRender = true
+                // 除非我们fallback到全屏渲染
+                if (!oldBounds && !newBounds) {
+                   // 无变化？不，hit 可能变了 (null -> null?)
+                }
             }
         }
 

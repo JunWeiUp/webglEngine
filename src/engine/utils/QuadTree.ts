@@ -1,11 +1,6 @@
 import { Node } from '../display/Node';
-
-export interface Rect {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
+import type { Rect } from '../core/Rect';
+export type { Rect };
 
 export class QuadTree {
     private bounds: Rect;

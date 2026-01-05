@@ -1,6 +1,7 @@
 import { defaultFragmentShader, defaultVertexShader } from './shaders';
 import { Node } from '../display/Node';
 import { mat3 } from 'gl-matrix';
+import type { Rect } from './Rect';
 
 /**
  * 核心渲染器类
@@ -42,7 +43,8 @@ export class Renderer {
         canvasGL.style.top = '0';
         canvasGL.style.left = '0';
         container.appendChild(canvasGL);
-        this.gl = canvasGL.getContext('webgl')!;
+        // 开启 preserveDrawingBuffer 以支持局部重绘 (Dirty Rect Rendering)
+        this.gl = canvasGL.getContext('webgl', { preserveDrawingBuffer: true })!;
 
         // 创建 2D Canvas (用于辅助绘制，如文本、调试框)
         const canvas2D = document.createElement('canvas');
@@ -186,15 +188,46 @@ export class Renderer {
     /**
      * 渲染整个场景
      * @param scene 场景根节点
+     * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
-    public render(scene: Node) {
-        // 清除 WebGL 画布
+    public render(scene: Node, dirtyRect?: Rect) {
+        // 1. 设置 WebGL Scissor Test (裁剪测试)
+        if (dirtyRect) {
+            this.gl.enable(this.gl.SCISSOR_TEST);
+            // WebGL Scissor 原点在左下角，而 Rect 是左上角
+            // 需要转换 Y 轴
+            const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
+            // 确保尺寸非负且在画布范围内
+            const x = Math.max(0, dirtyRect.x);
+            const y = Math.max(0, scissorY);
+            const w = Math.min(this.width - x, dirtyRect.width);
+            const h = Math.min(this.height - y, dirtyRect.height);
+            
+            this.gl.scissor(x, y, w, h);
+        } else {
+            this.gl.disable(this.gl.SCISSOR_TEST);
+        }
+
+        // 2. 清除 WebGL 画布
+        // 如果启用了 Scissor，clear 只会清除 Scissor 区域
         this.gl.clearColor(0.1, 0.1, 0.1, 1);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
-        // 清除 2D 画布
+        // 3. 清除 2D 画布
         this.ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
-        this.ctx.clearRect(0, 0, this.width, this.height);
+        
+        if (dirtyRect) {
+            // 局部清除
+            this.ctx.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+            // 设置 2D Context 裁剪，防止 Canvas 绘制溢出脏矩形
+            this.ctx.save();
+            this.ctx.beginPath();
+            this.ctx.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+            this.ctx.clip();
+        } else {
+            // 全屏清除
+            this.ctx.clearRect(0, 0, this.width, this.height);
+        }
 
         // 更新场景的世界变换矩阵
         scene.updateTransform(null, true); // 根节点强制更新
@@ -204,6 +237,11 @@ export class Renderer {
         
         // 渲染结束，强制刷新剩余的批次
         this.flush();
+
+        // 恢复 2D Context 状态
+        if (dirtyRect) {
+            this.ctx.restore();
+        }
     }
 
     /**
