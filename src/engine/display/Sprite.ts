@@ -1,7 +1,7 @@
 import { Node } from './Node';
 import { TextureManager } from '../utils/TextureManager';
+import { Texture } from '../core/Texture';
 import type { IRenderer } from '../core/IRenderer';
-// import { mat3 } from 'gl-matrix'; // 移除未使用的 mat3
 
 /**
  * Sprite (精灵) 类
@@ -12,7 +12,7 @@ import type { IRenderer } from '../core/IRenderer';
  */
 export class Sprite extends Node {
     /** WebGL 纹理对象 */
-    public texture: WebGLTexture | null = null;
+    public texture: Texture | null = null;
     /** 纹理图片的 URL */
     public textureUrl: string = "";
     /** 颜色叠加/混合 (RGBA) */
@@ -21,30 +21,30 @@ export class Sprite extends Node {
     // --- 渲染优化共享缓冲区 (静态) ---
     // 避免每帧创建新数组
     private static sharedVertices: Float32Array = new Float32Array(8);
-    private static sharedUVs: Float32Array = new Float32Array([
-        0, 0, // Top-Left
-        1, 0, // Top-Right
-        1, 1, // Bottom-Right
-        0, 1  // Bottom-Left
-    ]);
+    // sharedUVs 不再静态共享，因为每个 Sprite 可能不同 (Atlas)
+    // 但全屏纹理的 UV 是固定的，Texture 类默认提供。
 
     /**
      * 构造函数
      * @param gl WebGL 上下文
-     * @param url 纹理图片路径 (可选)
+     * @param textureOrUrl 纹理对象或图片路径
      */
-    constructor(gl: WebGLRenderingContext, url?: string) {
+    constructor(gl: WebGLRenderingContext, textureOrUrl?: string | Texture) {
         super();
-        if (url) {
-            this.textureUrl = url;
+        if (typeof textureOrUrl === 'string') {
+            this.textureUrl = textureOrUrl;
             // 异步加载纹理
-            TextureManager.loadTexture(gl, url).then(tex => {
+            TextureManager.loadTexture(gl, textureOrUrl).then(tex => {
                 this.texture = tex;
-                // 如果未设置宽高，默认使用 100x100 (实际项目中可能需要获取图片原始宽高)
-                if (this.width === 0) this.width = 100;
-                if (this.height === 0) this.height = 100;
+                // 如果未设置宽高，默认使用纹理宽高
+                if (this.width === 0) this.width = tex.width;
+                if (this.height === 0) this.height = tex.height;
                 this.invalidate(); // 纹理加载完成，请求重绘
             });
+        } else if (textureOrUrl instanceof Texture) {
+            this.texture = textureOrUrl;
+            this.width = textureOrUrl.width;
+            this.height = textureOrUrl.height;
         } else {
             // 创建默认白色纹理
             this.texture = TextureManager.createWhiteTexture(gl);
@@ -90,10 +90,11 @@ export class Sprite extends Node {
         v[7] = m11 * h + m21;
 
         // 提交到渲染器批次
+        // 注意：现在传递 texture.baseTexture 和 texture.uvs
         renderer.drawQuad(
-            this.texture,
+            this.texture.baseTexture,
             Sprite.sharedVertices,
-            Sprite.sharedUVs,
+            this.texture.uvs,
             this.color
         );
     }

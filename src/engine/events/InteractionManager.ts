@@ -2,6 +2,7 @@ import { Node } from '../display/Node';
 import { Renderer } from '../core/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
 import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
+import { QuadTree, type Rect } from '../utils/QuadTree';
 
 /**
  * 交互管理器
@@ -17,6 +18,7 @@ export class InteractionManager {
     private renderer: Renderer;
     private scene: Node;
     private auxLayer: AuxiliaryLayer;
+    private quadTree: QuadTree | null = null; // 空间索引，用于加速框选
 
     // 回调函数：当场景树结构发生变化时触发（如拖拽改变父子关系）
     public onStructureChange: (() => void) | null = null;
@@ -147,6 +149,28 @@ export class InteractionManager {
     }
 
     /**
+     * 构建 QuadTree 索引
+     * 仅包含可交互的叶子节点或容器
+     */
+    private buildQuadTree() {
+        // 估算场景边界 (假设足够大，或者动态计算)
+        // 这里使用一个较大的固定边界
+        const bounds: Rect = { x: -10000, y: -10000, width: 40000, height: 40000 };
+        this.quadTree = new QuadTree(bounds);
+
+        // 递归插入节点
+        const traverse = (node: Node) => {
+            if (node.interactive && node !== this.scene) {
+                this.quadTree!.insert(node);
+            }
+            for (const child of node.children) {
+                traverse(child);
+            }
+        };
+        traverse(this.scene);
+    }
+
+    /**
      * 鼠标按下事件处理
      */
     private onMouseDown(e: MouseEvent) {
@@ -161,6 +185,10 @@ export class InteractionManager {
 
             // 简单策略：开始框选时清空已有选择
             this.auxLayer.selectedNodes.clear();
+            
+            // 构建 QuadTree 以加速后续的框选计算
+            this.buildQuadTree();
+            
             this.scene.invalidate(); // 状态变更，重绘
             return;
         }
@@ -197,11 +225,24 @@ export class InteractionManager {
 
         let needsRender = false;
 
-        // 1. 处理框选
+        // 1. 处理框选 (实时预览)
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
             vec2.copy(this.auxLayer.selectionRect.end, pos);
             this.lastMousePos = pos;
-            this.scene.invalidate(); // 重绘框选框
+            
+            // 实时更新选中状态 (Optional: 如果性能允许)
+            // 这里使用 QuadTree 加速，所以可以实时高亮！
+            const start = this.auxLayer.selectionRect.start;
+            const end = this.auxLayer.selectionRect.end;
+            const minX = Math.min(start[0], end[0]);
+            const minY = Math.min(start[1], end[1]);
+            const maxX = Math.max(start[0], end[0]);
+            const maxY = Math.max(start[1], end[1]);
+            
+            this.auxLayer.selectedNodes.clear();
+            this.boxSelect(this.scene, minX, minY, maxX, maxY);
+            
+            this.scene.invalidate();
             return;
         }
 

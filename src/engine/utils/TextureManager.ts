@@ -1,7 +1,9 @@
-export class TextureManager {
-    private static cache: Map<string, WebGLTexture> = new Map();
+import { Texture } from '../core/Texture';
 
-    static loadTexture(gl: WebGLRenderingContext, url: string): Promise<WebGLTexture> {
+export class TextureManager {
+    private static cache: Map<string, Texture> = new Map();
+
+    static loadTexture(gl: WebGLRenderingContext, url: string): Promise<Texture> {
         if (this.cache.has(url)) {
             return Promise.resolve(this.cache.get(url)!);
         }
@@ -10,8 +12,9 @@ export class TextureManager {
             const image = new Image();
             image.crossOrigin = "Anonymous";
             image.onload = () => {
-                const texture = this.createTextureFromSource(gl, image);
-                if (texture) {
+                const webglTex = this.createTextureFromSource(gl, image);
+                if (webglTex) {
+                    const texture = new Texture(webglTex, image.width, image.height);
                     this.cache.set(url, texture);
                     resolve(texture);
                 } else {
@@ -39,11 +42,7 @@ export class TextureManager {
         return texture;
     }
 
-    static cacheTexture(key: string, texture: WebGLTexture) {
-        this.cache.set(key, texture);
-    }
-
-    static createWhiteTexture(gl: WebGLRenderingContext): WebGLTexture {
+    static createWhiteTexture(gl: WebGLRenderingContext): Texture {
         const key = "__white__";
         if (this.cache.has(key)) return this.cache.get(key)!;
 
@@ -52,7 +51,8 @@ export class TextureManager {
         const whitePixel = new Uint8Array([255, 255, 255, 255]);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, whitePixel);
         
-        this.cache.set(key, texture);
-        return texture;
+        const texObj = new Texture(texture, 1, 1);
+        this.cache.set(key, texObj);
+        return texObj;
     }
 }

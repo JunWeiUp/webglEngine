@@ -86,6 +86,7 @@ src/
 
 ## 📝 待办 / 计划
 
+*   [x] 引入 Spatial Partitioning (QuadTree) 加速框选查询。
+*   [x] 支持纹理图集 (Texture Atlas) 与 `Texture` 类封装。
 *   [ ] 实现脏矩形渲染 (Dirty Rect Rendering) 以进一步优化局部更新。
-*   [ ] 引入 Spatial Partitioning (如 QuadTree) 加速空间查询。
-*   [ ] 支持纹理图集 (Texture Atlas)。
+
