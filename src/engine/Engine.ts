@@ -33,6 +33,7 @@ export class Engine {
     // 脏矩形管理
     private dirtyRect: Rect | null = null;
     private fullInvalidate: boolean = true; // 默认第一帧全屏渲染
+    private sceneDirty: boolean = true; // WebGL 场景是否变脏
 
     /**
      * 构造函数
@@ -101,10 +102,9 @@ export class Engine {
     }
 
     /**
-     * 请求局部重绘
-     * @param rect 变脏的区域 (屏幕坐标)
+     * 更新脏矩形
      */
-    public invalidateArea(rect: Rect) {
+    private updateDirtyRect(rect: Rect) {
         if (this.fullInvalidate) return; // 已经全屏脏了，无需处理
 
         // 加上一点 Padding，防止边缘残留
@@ -130,6 +130,24 @@ export class Engine {
         } else {
             this.dirtyRect = paddedRect;
         }
+    }
+
+    /**
+     * 请求局部重绘
+     * @param rect 变脏的区域 (屏幕坐标)
+     */
+    public invalidateArea(rect: Rect) {
+        this.updateDirtyRect(rect);
+        this.sceneDirty = true;
+        this.requestRender();
+    }
+
+    /**
+     * 请求局部重绘 (仅辅助层变化，不重绘 WebGL)
+     * @param rect 变脏的区域 (屏幕坐标)
+     */
+    public invalidateAuxArea(rect: Rect) {
+        this.updateDirtyRect(rect);
         this.requestRender();
     }
 
@@ -157,6 +175,7 @@ export class Engine {
     private loop() {
         // 确定渲染区域
         const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
+        const drawWebGL = this.sceneDirty || this.fullInvalidate;
 
         // 1. 清除 2D Canvas (包括 Text 和 AuxLayer 共用的 Canvas)
         // 必须在绘制 Text 之前清除，否则会覆盖 Text
@@ -164,7 +183,7 @@ export class Engine {
 
         // 2. 渲染 WebGL 场景 (包括 WebGL 内容和 Canvas Text 内容)
         // Renderer.render 内部负责 WebGL 的 clear
-        this.renderer.render(this.scene, renderRect);
+        this.renderer.render(this.scene, renderRect, drawWebGL);
         
         // 3. 绘制辅助内容 (传入 renderRect 以进行剔除优化)
         this.auxLayer.render(this.renderer.ctx, this.scene, renderRect);
@@ -174,6 +193,7 @@ export class Engine {
 
         // 重置脏状态
         this.fullInvalidate = false;
+        this.sceneDirty = false;
         this.dirtyRect = null;
     }
 }

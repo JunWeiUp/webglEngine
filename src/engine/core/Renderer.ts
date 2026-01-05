@@ -189,29 +189,32 @@ export class Renderer {
      * 渲染整个场景 (WebGL)
      * @param scene 场景根节点
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
+     * @param drawWebGL 是否绘制 WebGL 内容 (默认 true)。如果为 false，仅更新变换和绘制 Canvas 内容。
      */
-    public render(scene: Node, dirtyRect?: Rect) {
+    public render(scene: Node, dirtyRect?: Rect, drawWebGL: boolean = true) {
         // 1. 设置 WebGL Scissor Test (裁剪测试)
-        if (dirtyRect) {
-            this.gl.enable(this.gl.SCISSOR_TEST);
-            // WebGL Scissor 原点在左下角，而 Rect 是左上角
-            // 需要转换 Y 轴
-            const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
-            // 确保尺寸非负且在画布范围内
-            const x = Math.max(0, dirtyRect.x);
-            const y = Math.max(0, scissorY);
-            const w = Math.min(this.width - x, dirtyRect.width);
-            const h = Math.min(this.height - y, dirtyRect.height);
-            
-            this.gl.scissor(x, y, w, h);
-        } else {
-            this.gl.disable(this.gl.SCISSOR_TEST);
-        }
+        if (drawWebGL) {
+            if (dirtyRect) {
+                this.gl.enable(this.gl.SCISSOR_TEST);
+                // WebGL Scissor 原点在左下角，而 Rect 是左上角
+                // 需要转换 Y 轴
+                const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
+                // 确保尺寸非负且在画布范围内
+                const x = Math.max(0, dirtyRect.x);
+                const y = Math.max(0, scissorY);
+                const w = Math.min(this.width - x, dirtyRect.width);
+                const h = Math.min(this.height - y, dirtyRect.height);
+                
+                this.gl.scissor(x, y, w, h);
+            } else {
+                this.gl.disable(this.gl.SCISSOR_TEST);
+            }
 
-        // 2. 清除 WebGL 画布
-        // 如果启用了 Scissor，clear 只会清除 Scissor 区域
-        this.gl.clearColor(0.1, 0.1, 0.1, 1);
-        this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+            // 2. 清除 WebGL 画布
+            // 如果启用了 Scissor，clear 只会清除 Scissor 区域
+            this.gl.clearColor(0.1, 0.1, 0.1, 1);
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        }
 
         // 3. 清除 2D 画布
         this.ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
@@ -233,10 +236,12 @@ export class Renderer {
         scene.updateTransform(null, true); // 根节点强制更新
 
         // 递归渲染节点树
-        this.renderNode(scene);
+        this.renderNode(scene, drawWebGL);
         
         // 渲染结束，强制刷新剩余的批次
-        this.flush();
+        if (drawWebGL) {
+            this.flush();
+        }
 
         // 恢复 2D Context 状态
         if (dirtyRect) {
@@ -278,7 +283,7 @@ export class Renderer {
      * 递归渲染节点及其子节点
      * 包含视锥体剔除优化
      */
-    private renderNode(node: Node) {
+    private renderNode(node: Node, drawWebGL: boolean) {
         // 视锥体剔除 (Frustum Culling)
         let isVisible = true;
         
@@ -289,7 +294,7 @@ export class Renderer {
 
         if (isVisible) {
             // 调用节点的 WebGL 渲染方法（如果存在）
-            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+            if (drawWebGL && 'renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
                 (node as any).renderWebGL(this);
             }
 
@@ -308,7 +313,7 @@ export class Renderer {
         }
 
         for (const child of node.children) {
-            this.renderNode(child);
+            this.renderNode(child, drawWebGL);
         }
     }
 

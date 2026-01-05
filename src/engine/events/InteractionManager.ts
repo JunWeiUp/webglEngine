@@ -296,9 +296,22 @@ export class InteractionManager {
                 if (this.onHoverChange) this.onHoverChange();
                 this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
                 
-                // 提交脏矩形
-                if (oldBounds) this.engine.invalidateArea(oldBounds);
-                if (newBounds) this.engine.invalidateArea(newBounds);
+                // 提交脏矩形 (扩大范围以包含高亮边框)
+                const padding = 4;
+                if (oldBounds) {
+                    oldBounds.x -= padding;
+                    oldBounds.y -= padding;
+                    oldBounds.width += padding * 2;
+                    oldBounds.height += padding * 2;
+                    this.engine.invalidateAuxArea(oldBounds);
+                }
+                if (newBounds) {
+                    newBounds.x -= padding;
+                    newBounds.y -= padding;
+                    newBounds.width += padding * 2;
+                    newBounds.height += padding * 2;
+                    this.engine.invalidateAuxArea(newBounds);
+                }
                 
                 // 如果没有脏矩形 (例如从空白移到空白)，无需重绘
                 // 但 onHoverChange 可能会更新 OutlineView
