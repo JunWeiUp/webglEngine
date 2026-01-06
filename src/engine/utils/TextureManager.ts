@@ -52,10 +52,18 @@ export class TextureManager {
 
     private static async loadTextureBitmap(gl: WebGLRenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         try {
-            const response = await fetch(url, { signal, mode: 'cors' });
-            if (!response.ok) throw new Error(`Failed to load texture: ${response.statusText}`);
+            let blob: Blob;
+
+            if (url.startsWith('data:')) {
+                // Avoid fetch for data URIs to bypass potential network stack issues
+                blob = this.base64ToBlob(url);
+            } else {
+                const fetchOptions: RequestInit = { signal, mode: 'cors' };
+                const response = await fetch(url, fetchOptions);
+                if (!response.ok) throw new Error(`Failed to load texture: ${response.statusText}`);
+                blob = await response.blob();
+            }
             
-            const blob = await response.blob();
             const bitmap = await createImageBitmap(blob, {
                 premultiplyAlpha: 'premultiply', // Standard for WebGL
                 colorSpaceConversion: 'default'
@@ -74,6 +82,22 @@ export class TextureManager {
         } catch (error) {
             throw error;
         }
+    }
+
+    private static base64ToBlob(dataURI: string): Blob {
+        // Basic Base64 decoding
+        const splitDataURI = dataURI.split(',');
+        const byteString = atob(splitDataURI[1]);
+        const mimeString = splitDataURI[0].split(':')[1].split(';')[0];
+        
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        
+        for (let i = 0; i < byteString.length; i++) {
+            ia[i] = byteString.charCodeAt(i);
+        }
+        
+        return new Blob([ab], { type: mimeString });
     }
 
     static createTextureFromSource(gl: WebGLRenderingContext, source: TexImageSource): WebGLTexture | null {

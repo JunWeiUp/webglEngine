@@ -331,11 +331,10 @@ export class InteractionManager {
                     const localDeltaX = deltaX * m[0] + deltaY * m[3];
                     const localDeltaY = deltaX * m[1] + deltaY * m[4];
 
-                    node.transform.position[0] += localDeltaX;
-                    node.transform.position[1] += localDeltaY;
-                    node.transform.dirty = true; // 标记脏位
-                    needsRender = true;
-
+                    node.x += localDeltaX;
+                    node.y += localDeltaY;
+                    // node.transform.dirty = true; // Handled by setter
+                    // needsRender = true; // Handled by setter
                 }
             }
 
@@ -375,10 +374,10 @@ export class InteractionManager {
 
         } else if (this.isPanning) {
             // 5. 处理画布平移
-            this.scene.transform.position[0] += deltaX;
-            this.scene.transform.position[1] += deltaY;
-            this.scene.transform.dirty = true;
-            needsRender = true;
+            this.scene.x += deltaX;
+            this.scene.y += deltaY;
+            // this.scene.transform.dirty = true;
+            // needsRender = true;
         }
 
         this.lastMousePos = pos;
@@ -495,8 +494,9 @@ export class InteractionManager {
                     const newLocal = vec2.create();
                     vec2.transformMat3(newLocal, worldPos, invertParent);
 
-                    draggingNode.transform.position = newLocal;
-                    draggingNode.transform.dirty = true;
+                    draggingNode.x = newLocal[0];
+                    draggingNode.y = newLocal[1];
+                    // draggingNode.transform.dirty = true;
 
                     console.log(`Reparented ${draggingNode.name} to ${target.name}`);
                 }
@@ -547,12 +547,12 @@ export class InteractionManager {
         const newTransX = mouseX - (mouseX - transX) * scaleChange;
         const newTransY = mouseY - (mouseY - transY) * scaleChange;
 
-        this.scene.transform.scale[0] = newScale;
-        this.scene.transform.scale[1] = newScale;
-        this.scene.transform.position[0] = newTransX;
-        this.scene.transform.position[1] = newTransY;
-        this.scene.transform.dirty = true;
+        this.scene.scaleX = newScale;
+        this.scene.scaleY = newScale;
+        this.scene.x = newTransX;
+        this.scene.y = newTransY;
+        // this.scene.transform.dirty = true;
 
-        this.scene.invalidate(); // 缩放变化，重绘
+        // this.scene.invalidate(); // 缩放变化，重绘 (Handled by setter)
     }
 }

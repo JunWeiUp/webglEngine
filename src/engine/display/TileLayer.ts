@@ -37,7 +37,7 @@ export class TileLayer extends Node {
     ]);
 
     // LRU 配置
-    private static MAX_TILES = 200; // 最大缓存瓦片数
+    private static MAX_TILES = 20000; // 最大缓存瓦片数
     private static GC_INTERVAL = 60; // GC 间隔帧数
     private gcFrameCount = 0;
 

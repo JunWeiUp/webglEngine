@@ -48,8 +48,12 @@ export class Engine {
         this.scene.name = "Scene";
 
         // 绑定场景失效回调，触发渲染
-        this.scene.onInvalidate = () => {
-            this.invalidateFull();
+        this.scene.onInvalidate = (rect?: Rect) => {
+            if (rect) {
+                this.invalidateArea(rect);
+            } else {
+                this.invalidateFull();
+            }
         };
 
         // 初始化辅助图层
@@ -107,7 +111,7 @@ export class Engine {
     private updateDirtyRect(rect: Rect) {
         if (this.fullInvalidate) return; // 已经全屏脏了，无需处理
 
-        // 加上一点 Padding，防止边缘残留
+        // 加上一点 Padding，防止边缘残留 (抗锯齿/纹理过滤溢出/阴影)
         const padding = 2;
         const paddedRect = {
             x: Math.floor(rect.x - padding),
@@ -177,20 +181,14 @@ export class Engine {
         const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
         const drawWebGL = this.sceneDirty || this.fullInvalidate;
 
-        // 1. 清除 2D Canvas (包括 Text 和 AuxLayer 共用的 Canvas)
-        // 必须在绘制 Text 之前清除，否则会覆盖 Text
-        this.renderer.clearCanvas2D(renderRect);
+        // 1. WebGL Pass (包括 Sprite 和 Text)
+        if (drawWebGL) {
+            this.renderer.render(this.scene, renderRect);
+        }
 
-        // 2. 渲染 WebGL 场景 (包括 WebGL 内容和 Canvas Text 内容)
-        // Renderer.render 内部负责 WebGL 的 clear
-        this.renderer.render(this.scene, renderRect, drawWebGL);
+        // 2. 绘制辅助内容
+        this.auxLayer.render(this.renderer.ctx, this.scene);
         
-        // 3. 绘制辅助内容 (传入 renderRect 以进行剔除优化)
-        this.auxLayer.render(this.renderer.ctx, this.scene, renderRect);
-        
-        // 4. 恢复 2D 状态 (clip)
-        this.renderer.restoreCanvas2D(renderRect);
-
         // 重置脏状态
         this.fullInvalidate = false;
         this.sceneDirty = false;

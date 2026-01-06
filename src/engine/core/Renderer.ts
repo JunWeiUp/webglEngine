@@ -192,173 +192,152 @@ export class Renderer {
      * 渲染整个场景 (WebGL)
      * @param scene 场景根节点
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
-     * @param drawWebGL 是否绘制 WebGL 内容 (默认 true)。如果为 false，仅更新变换和绘制 Canvas 内容。
      */
-    public render(scene: Node, dirtyRect?: Rect, drawWebGL: boolean = true) {
+    public render(scene: Node, dirtyRect?: Rect) {
         // 1. 设置 WebGL Scissor Test (裁剪测试)
-        if (drawWebGL) {
-            if (dirtyRect) {
-                this.gl.enable(this.gl.SCISSOR_TEST);
-                // WebGL Scissor 原点在左下角，而 Rect 是左上角
-                // 需要转换 Y 轴
-                const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
-                // 确保尺寸非负且在画布范围内
-                const x = Math.max(0, dirtyRect.x);
-                const y = Math.max(0, scissorY);
-                const w = Math.min(this.width - x, dirtyRect.width);
-                const h = Math.min(this.height - y, dirtyRect.height);
-                console.log("dirtyRect", x, y, w, h);
-                this.gl.scissor(x, y, w, h);
-            } else {
-                this.gl.disable(this.gl.SCISSOR_TEST);
-            }
-
-            // 2. 清除 WebGL 画布
-            // 如果启用了 Scissor，clear 只会清除 Scissor 区域
-            this.gl.clearColor(0.1, 0.1, 0.1, 1);
-            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-        }
-
-        // 3. 清除 2D 画布
-        this.ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
-        
         if (dirtyRect) {
-            // 局部清除
-            this.ctx.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-            // 设置 2D Context 裁剪，防止 Canvas 绘制溢出脏矩形
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-            this.ctx.clip();
+            this.gl.enable(this.gl.SCISSOR_TEST);
+            // WebGL Scissor 原点在左下角，而 Rect 是左上角
+            // 需要转换 Y 轴
+            // 确保 Scissor 区域完全覆盖 dirtyRect (向下取整 Y，向上取整 H)
+            const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
+            
+            const x = Math.floor(Math.max(0, dirtyRect.x));
+            const y = Math.floor(Math.max(0, scissorY));
+            const w = Math.ceil(Math.min(this.width - x, dirtyRect.width));
+            const h = Math.ceil(Math.min(this.height - y, dirtyRect.height));
+
+            console.log("dirtyRect", x, y, w, h);
+            this.gl.scissor(x, y, w, h);
         } else {
-            // 全屏清除
-            this.ctx.clearRect(0, 0, this.width, this.height);
+            this.gl.disable(this.gl.SCISSOR_TEST);
         }
+
+        // 2. 清除 WebGL 画布
+        // 如果启用了 Scissor，clear 只会清除 Scissor 区域
+        this.gl.clearColor(0.1, 0.1, 0.1, 1);
+        this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
         // 更新场景的世界变换矩阵
         scene.updateTransform(null, true); // 根节点强制更新
 
         // 递归渲染节点树
-        this.renderNode(scene, drawWebGL);
+        this.renderNodeWebGL(scene, dirtyRect);
         
         // 渲染结束，强制刷新剩余的批次
-        if (drawWebGL) {
-            this.flush();
-        }
-
-        // 恢复 2D Context 状态
-        if (dirtyRect) {
-            this.ctx.restore();
-        }
+        this.flush();
     }
 
     /**
-     * 清除 2D Canvas (用于辅助图层)
-     * @param dirtyRect 脏矩形
+     * 渲染整个场景 (Canvas 2D Pass)
+     * @param scene 场景根节点
+     * @param dirtyRect 脏矩形区域 (可选)
      */
-    public clearCanvas2D(dirtyRect?: Rect) {
-        this.ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
-        
-        if (dirtyRect) {
-            // 局部清除
-            this.ctx.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-            // 设置 2D Context 裁剪，防止 Canvas 绘制溢出脏矩形
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-            this.ctx.clip();
-        } else {
-            // 全屏清除
-            this.ctx.clearRect(0, 0, this.width, this.height);
-        }
+    public renderCanvas(scene: Node, dirtyRect?: Rect) {
+        // 递归渲染节点树 (Canvas Pass)
+        this.renderNodeCanvas(scene, dirtyRect);
+    }
+
+
+    /**
+     * 恢复 2D Canvas 状态 (No-op)
+     */
+    public restoreCanvas2D(_dirtyRect?: Rect) {
+        // No-op
     }
 
     /**
-     * 恢复 2D Canvas 状态 (对应 clearCanvas2D 的 clip)
+     * 递归渲染节点及其子节点 (WebGL Pass)
      */
-    public restoreCanvas2D(dirtyRect?: Rect) {
-        if (dirtyRect) {
-            this.ctx.restore();
-        }
-    }
-
-    /**
-     * 递归渲染节点及其子节点
-     * 包含视锥体剔除优化
-     */
-    private renderNode(node: Node, drawWebGL: boolean) {
+    private renderNodeWebGL(node: Node, cullingRect?: Rect) {
         // 视锥体剔除 (Frustum Culling)
         let isVisible = true;
         
-        // 仅对有尺寸的节点进行剔除检查（如 Sprite）
+        // 仅对有尺寸的节点进行剔除检查
         if (node.width > 0 && node.height > 0) {
-            isVisible = this.isNodeVisible(node);
+            isVisible = this.isNodeVisible(node, cullingRect);
         }
 
         if (isVisible) {
             // 调用节点的 WebGL 渲染方法（如果存在）
-            if (drawWebGL && 'renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
                 (node as any).renderWebGL(this);
             }
+        }
 
-            // 调用节点的 Canvas 渲染方法（如果存在）
-            if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
+        // 递归遍历子节点
+        for (const child of node.children) {
+            this.renderNodeWebGL(child, cullingRect);
+        }
+    }
+
+    /**
+     * 递归渲染节点及其子节点 (Canvas Pass)
+     */
+    private renderNodeCanvas(node: Node, cullingRect?: Rect) {
+        // 视锥体剔除
+        let isVisible = true;
+        if (node.width > 0 && node.height > 0) {
+            isVisible = this.isNodeVisible(node, cullingRect);
+        }
+
+        if (isVisible) {
+             // 调用节点的 Canvas 渲染方法（如果存在）
+             if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
                 (node as any).renderCanvas(this);
             }
         }
 
         // 递归遍历子节点
-        // 优化：如果当前节点被剔除（即 isVisible 为 false，且它是有尺寸的），
-        // 则不再遍历其子节点。这假设子节点都在父节点的包围盒内。
-        // 对于 Container (400x400) 这种用法，这是成立的。
-        if (!isVisible && node.width > 0 && node.height > 0) {
-            return;
-        }
-
         for (const child of node.children) {
-            this.renderNode(child, drawWebGL);
+            this.renderNodeCanvas(child, cullingRect);
         }
     }
 
     /**
      * 检查节点是否在视口范围内（基于 AABB）
      */
-    private isNodeVisible(node: Node): boolean {
-        // 获取节点的世界变换矩阵
-        const m = node.transform.worldMatrix;
-        const w = node.width;
-        const h = node.height;
+    private isNodeVisible(node: Node, cullingRect?: Rect): boolean {
+        let minX, minY, maxX, maxY;
 
-        // 计算节点四个角的世界坐标
-        // 0,0  w,0  0,h  w,h
-        // 变换公式:
-        // x' = x*m00 + y*m10 + m20
-        // y' = x*m01 + y*m11 + m21
-        
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        
-        const corners = [
-            0, 0,
-            w, 0,
-            0, h,
-            w, h
-        ];
-        
-        for (let i = 0; i < 4; i++) {
-            const x = corners[i*2];
-            const y = corners[i*2+1];
+        // 1. 优先使用缓存的 World AABB (在 updateTransform 中已计算)
+        if (node.worldAABB) {
+            minX = node.worldAABB.x;
+            minY = node.worldAABB.y;
+            maxX = minX + node.worldAABB.width;
+            maxY = minY + node.worldAABB.height;
+        } else {
+            // 2. 回退到实时计算 (通常不应发生，除非节点无尺寸或未 updateTransform)
+            const m = node.transform.worldMatrix;
+            const w = node.width;
+            const h = node.height;
+
+            minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
             
-            const wx = x * m[0] + y * m[3] + m[6];
-            const wy = x * m[1] + y * m[4] + m[7];
+            const corners = [0, 0, w, 0, 0, h, w, h];
             
-            if (wx < minX) minX = wx;
-            if (wx > maxX) maxX = wx;
-            if (wy < minY) minY = wy;
-            if (wy > maxY) maxY = wy;
+            for (let i = 0; i < 4; i++) {
+                const x = corners[i*2];
+                const y = corners[i*2+1];
+                
+                const wx = x * m[0] + y * m[3] + m[6];
+                const wy = x * m[1] + y * m[4] + m[7];
+                
+                if (wx < minX) minX = wx;
+                if (wx > maxX) maxX = wx;
+                if (wy < minY) minY = wy;
+                if (wy > maxY) maxY = wy;
+            }
         }
         
-        // AABB 相交检测: 检查是否与视口 (0, 0, width, height) 重叠
-        if (maxX < 0 || minX > this.width || maxY < 0 || minY > this.height) {
+        // AABB 相交检测: 检查是否与视口 (或 DirtyRect) 重叠
+        // 如果 cullingRect 为空，则使用整个视口 (this.width, this.height)
+        const viewX = cullingRect ? cullingRect.x : 0;
+        const viewY = cullingRect ? cullingRect.y : 0;
+        const viewW = cullingRect ? cullingRect.width : this.width;
+        const viewH = cullingRect ? cullingRect.height : this.height;
+
+        if (maxX < viewX || minX > viewX + viewW || maxY < viewY || minY > viewY + viewH) {
             return false;
         }
         
@@ -425,11 +404,79 @@ export class Renderer {
     }
 
     /**
-     * 添加一个 Quad 到批处理队列
+     * 高性能绘制 Quad，避免 Float32Array 分配
      * @param texture 纹理对象
-     * @param vertices 世界坐标顶点 (4个点, 8个 float)
-     * @param uvs UV坐标 (4个点, 8个 float)
-     * @param color 颜色 (4个 float)
+     * @param x0, y0 左上角
+     * @param x1, y1 右上角
+     * @param x2, y2 右下角
+     * @param x3, y3 左下角
+     * @param uvs UV 数组 (Float32Array, 通常从 Texture 复用)
+     * @param color 颜色数组 (Float32Array, 建议缓存复用)
+     */
+    public drawQuadFast(
+        texture: WebGLTexture, 
+        x0: number, y0: number, 
+        x1: number, y1: number, 
+        x2: number, y2: number, 
+        x3: number, y3: number, 
+        uvs: Float32Array, 
+        color: Float32Array
+    ) {
+        // 查找或添加纹理到槽位
+        let textureIndex = this.textureSlots.indexOf(texture);
+        
+        if (textureIndex === -1) {
+            if (this.textureSlots.length >= Renderer.MAX_TEXTURES) {
+                this.flush();
+                textureIndex = 0;
+                this.textureSlots.push(texture);
+            } else {
+                textureIndex = this.textureSlots.length;
+                this.textureSlots.push(texture);
+            }
+        }
+
+        if (this.currentQuadCount >= Renderer.MAX_QUADS) {
+            this.flush();
+            textureIndex = 0;
+            this.textureSlots.push(texture);
+        }
+
+        const offset = this.currentQuadCount * 4 * Renderer.VERTEX_SIZE;
+        const data = this.vertexBufferData;
+        const r = color[0], g = color[1], b = color[2], a = color[3];
+
+        // Vertex 0 (TL)
+        let idx = offset;
+        data[idx++] = x0; data[idx++] = y0;
+        data[idx++] = uvs[0]; data[idx++] = uvs[1];
+        data[idx++] = r; data[idx++] = g; data[idx++] = b; data[idx++] = a;
+        data[idx++] = textureIndex;
+
+        // Vertex 1 (TR)
+        data[idx++] = x1; data[idx++] = y1;
+        data[idx++] = uvs[2]; data[idx++] = uvs[3];
+        data[idx++] = r; data[idx++] = g; data[idx++] = b; data[idx++] = a;
+        data[idx++] = textureIndex;
+
+        // Vertex 2 (BR)
+        data[idx++] = x2; data[idx++] = y2;
+        data[idx++] = uvs[4]; data[idx++] = uvs[5];
+        data[idx++] = r; data[idx++] = g; data[idx++] = b; data[idx++] = a;
+        data[idx++] = textureIndex;
+
+        // Vertex 3 (BL)
+        data[idx++] = x3; data[idx++] = y3;
+        data[idx++] = uvs[6]; data[idx++] = uvs[7];
+        data[idx++] = r; data[idx++] = g; data[idx++] = b; data[idx++] = a;
+        data[idx++] = textureIndex;
+
+        this.currentQuadCount++;
+    }
+
+    /**
+     * 添加一个 Quad 到批处理队列
+     * @deprecated Use drawQuadFast instead to avoid GC
      */
     public drawQuad(texture: WebGLTexture, vertices: Float32Array, uvs: Float32Array, color: Float32Array) {
         // 查找或添加纹理到槽位

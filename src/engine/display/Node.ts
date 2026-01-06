@@ -43,7 +43,7 @@ export class Node {
      * 失效回调
      * 当该节点需要重绘时调用（通常仅在根节点设置此回调，用于通知引擎）
      */
-    public onInvalidate: (() => void) | null = null;
+    public onInvalidate: ((rect?: Rect) => void) | null = null;
 
     constructor() {
     }
@@ -51,15 +51,129 @@ export class Node {
     /**
      * 标记节点为脏 (需要重绘)
      * 该请求会向上冒泡直到根节点，触发 onInvalidate
+     * @param rect 脏矩形 (世界坐标)
      */
-    public invalidate() {
+    public invalidate(rect?: Rect) {
         if (this.onInvalidate) {
-            this.onInvalidate();
+            this.onInvalidate(rect);
         }
         // 向父节点冒泡
         if (this.parent) {
-            this.parent.invalidate();
+            this.parent.invalidate(rect);
         }
+    }
+
+    // --- Getters/Setters for Dirty Rect Optimization ---
+
+    get x(): number { return this.transform.position[0]; }
+    set x(value: number) {
+        if (this.transform.position[0] !== value) {
+            this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
+        }
+    }
+
+    get y(): number { return this.transform.position[1]; }
+    set y(value: number) {
+        if (this.transform.position[1] !== value) {
+            this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
+        }
+    }
+
+    get scaleX(): number { return this.transform.scale[0]; }
+    set scaleX(value: number) {
+        if (this.transform.scale[0] !== value) {
+            this.invalidateWithSelfBounds(() => this.transform.setScale(value, this.scaleY));
+        }
+    }
+
+    get scaleY(): number { return this.transform.scale[1]; }
+    set scaleY(value: number) {
+        if (this.transform.scale[1] !== value) {
+            this.invalidateWithSelfBounds(() => this.transform.setScale(this.scaleX, value));
+        }
+    }
+
+    get rotation(): number { return this.transform.rotation; }
+    set rotation(value: number) {
+        if (this.transform.rotation !== value) {
+            this.invalidateWithSelfBounds(() => this.transform.setRotation(value));
+        }
+    }
+
+    /**
+     * 智能脏矩形计算
+     * - 如果是根节点或无尺寸的容器节点，直接触发全屏重绘 (避免递归计算)
+     * - 如果是实体节点 (有宽高)，计算自身局部脏矩形 (O(1))
+     */
+    private invalidateWithSelfBounds(changeFn: () => void) {
+        // 1. 如果是根节点，或者自身无尺寸(容器)，直接全屏重绘，跳过所有计算
+        if (this.parent === null || (this.width <= 0 && this.height <= 0)) {
+            changeFn();
+            // 必须更新变换，否则渲染时位置不对
+            this.updateTransform(this.parent ? this.parent.transform.worldMatrix : null, true);
+            this.invalidate(); // 全屏
+            return;
+        }
+
+        // 2. 实体节点：计算局部脏矩形
+        const oldRect = this.getBounds(false); // false = 仅自身，不递归
+        
+        changeFn();
+        this.updateTransform(this.parent!.transform.worldMatrix, true);
+        
+        const newRect = this.getBounds(false);
+
+        if (oldRect && newRect) {
+            this.invalidate(this.unionRect(oldRect, newRect));
+        } else if (newRect) {
+            this.invalidate(newRect);
+        } else if (oldRect) {
+            this.invalidate(oldRect);
+        } else {
+            this.invalidate();
+        }
+    }
+
+    /**
+     * 获取节点及其子节点的合并包围盒 (世界坐标)
+     * @param includeChildren 是否包含子节点
+     */
+    public getBounds(includeChildren: boolean = true): Rect | null {
+        // 如果当前节点没有尺寸且没有子节点，返回 null
+        if (this.width <= 0 && this.height <= 0 && this.children.length === 0) {
+            return null;
+        }
+
+        let rect: Rect | null = null;
+
+        // 1. 自身的包围盒
+        if (this.worldAABB) {
+            rect = { ...this.worldAABB };
+        }
+
+        if (!includeChildren) return rect;
+
+        // 2. 合并子节点的包围盒
+        for (const child of this.children) {
+            const childBounds = child.getBounds(true);
+            if (childBounds) {
+                if (rect) {
+                    rect = this.unionRect(rect, childBounds);
+                } else {
+                    rect = childBounds;
+                }
+            }
+        }
+
+        return rect;
+    }
+
+    private unionRect(r1: Rect, r2: Rect): Rect {
+        const minX = Math.min(r1.x, r2.x);
+        const minY = Math.min(r1.y, r2.y);
+        const maxX = Math.max(r1.x + r1.width, r2.x + r2.width);
+        const maxY = Math.max(r1.y + r1.height, r2.y + r2.height);
+        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
     }
 
     /**
@@ -203,10 +317,4 @@ export class Node {
      * @param _renderer 渲染器实例
      */
     renderWebGL(_renderer: IRenderer) { }
-
-    /**
-     * Canvas 渲染方法 (需子类实现)
-     * @param _renderer 渲染器实例
-     */
-    renderCanvas(_renderer: any) { }
 }

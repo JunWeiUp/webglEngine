@@ -210,7 +210,8 @@ createButton("添加图片 (Sprite)", () => {
     // We should inverse transform screen center to scene local
     // For simplicity, just put it at 400, 400 or random offset from current scene pos
     // Better: Put it at (400, 400)
-    sprite.transform.position = [400 + Math.random() * 50, 400 + Math.random() * 50];
+    sprite.x = 400 + Math.random() * 50;
+    sprite.y = 400 + Math.random() * 50;
 
     engine.scene.addChild(sprite);
     console.log(`Created ${sprite.name}`);
@@ -221,7 +222,8 @@ createButton("添加图片 (Sprite)", () => {
 createButton("添加容器 (Container)", () => {
     const container = new Container(engine.renderer.gl);
     container.name = `Container_${Math.floor(Math.random() * 1000)}`;
-    container.transform.position = [300 + Math.random() * 50, 300 + Math.random() * 50];
+    container.x = 300 + Math.random() * 50;
+    container.y = 300 + Math.random() * 50;
     container.interactive = true;
     container.width = 200;
     container.height = 200;
