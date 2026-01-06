@@ -263,7 +263,7 @@ export class InteractionManager {
             const maxY = Math.max(start[1], end[1]);
             
             this.auxLayer.selectedNodes.clear();
-            this.boxSelect(this.scene, minX, minY, maxX, maxY);
+            this.boxSelect(minX, minY, maxX, maxY);
             
             this.scene.invalidate();
             return;
@@ -400,32 +400,53 @@ export class InteractionManager {
     }
 
     /**
-     * 递归框选逻辑
-     * @param node 当前检查节点
+     * 使用 QuadTree 加速的框选逻辑
      * @param minX 框选区域最小X (屏幕)
      * @param minY 框选区域最小Y (屏幕)
      * @param maxX 框选区域最大X (屏幕)
      * @param maxY 框选区域最大Y (屏幕)
      */
-    private boxSelect(node: Node, minX: number, minY: number, maxX: number, maxY: number) {
-        if (node.interactive && node !== this.scene) { // 不选择场景根节点
-            // 计算节点在屏幕空间的 AABB
-            const corners = [
-                vec2.fromValues(0, 0),
-                vec2.fromValues(node.width, 0),
-                vec2.fromValues(node.width, node.height),
-                vec2.fromValues(0, node.height)
-            ];
+    private boxSelect(minX: number, minY: number, maxX: number, maxY: number) {
+        if (!this.quadTree) return;
 
-            let nodeMinX = Infinity, nodeMinY = Infinity, nodeMaxX = -Infinity, nodeMaxY = -Infinity;
+        const selectionRect: Rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const candidates: Node[] = [];
+        
+        // 1. 从 QuadTree 获取潜在相交的节点 (Broad Phase)
+        this.quadTree.retrieve(candidates, selectionRect);
 
-            for (const p of corners) {
-                const screen = vec2.create();
-                vec2.transformMat3(screen, p, node.transform.worldMatrix);
-                nodeMinX = Math.min(nodeMinX, screen[0]);
-                nodeMinY = Math.min(nodeMinY, screen[1]);
-                nodeMaxX = Math.max(nodeMaxX, screen[0]);
-                nodeMaxY = Math.max(nodeMaxY, screen[1]);
+        // 2. 精确检测 (Narrow Phase)
+        for (const node of candidates) {
+            // 不选择场景根节点
+            if (node === this.scene) continue;
+
+            // 优先使用 World AABB (如果存在)
+            let nodeMinX, nodeMinY, nodeMaxX, nodeMaxY;
+
+            if (node.worldAABB) {
+                nodeMinX = node.worldAABB.x;
+                nodeMinY = node.worldAABB.y;
+                nodeMaxX = nodeMinX + node.worldAABB.width;
+                nodeMaxY = nodeMinY + node.worldAABB.height;
+            } else {
+                // 计算节点在屏幕空间的 AABB
+                const corners = [
+                    vec2.fromValues(0, 0),
+                    vec2.fromValues(node.width, 0),
+                    vec2.fromValues(node.width, node.height),
+                    vec2.fromValues(0, node.height)
+                ];
+
+                nodeMinX = Infinity; nodeMinY = Infinity; nodeMaxX = -Infinity; nodeMaxY = -Infinity;
+
+                for (const p of corners) {
+                    const screen = vec2.create();
+                    vec2.transformMat3(screen, p, node.transform.worldMatrix);
+                    nodeMinX = Math.min(nodeMinX, screen[0]);
+                    nodeMinY = Math.min(nodeMinY, screen[1]);
+                    nodeMaxX = Math.max(nodeMaxX, screen[0]);
+                    nodeMaxY = Math.max(nodeMaxY, screen[1]);
+                }
             }
 
             // AABB 相交检测
@@ -435,11 +456,6 @@ export class InteractionManager {
             if (overlaps) {
                 this.auxLayer.selectedNodes.add(node);
             }
-        }
-
-        // 递归检查子节点
-        for (const child of node.children) {
-            this.boxSelect(child, minX, minY, maxX, maxY);
         }
     }
 
@@ -460,7 +476,7 @@ export class InteractionManager {
             const maxY = Math.max(start[1], end[1]);
 
             // 执行框选检测
-            this.boxSelect(this.scene, minX, minY, maxX, maxY);
+            this.boxSelect(minX, minY, maxX, maxY);
 
             // 重置状态
             this.isBoxSelecting = false;
@@ -524,35 +540,57 @@ export class InteractionManager {
     }
 
     /**
-     * 滚轮缩放事件处理
+     * 滚轮事件处理
+     * 支持：
+     * 1. 鼠标滚轮 -> 缩放
+     * 2. 触控板捏合 (Pinch) -> 缩放 (ctrlKey = true)
+     * 3. 触控板双指滑动 -> 平移 (deltaMode = 0)
      */
     private onWheel(e: WheelEvent) {
         e.preventDefault();
 
-        const zoomSpeed = 0.001;
-        const scaleChange = 1 - e.deltaY * zoomSpeed;
+        // 判定是否为缩放操作
+        // 1. 按下 Ctrl 键 (触控板捏合的标准行为，或 Ctrl+滚轮)
+        // 2. DeltaMode 为 LINE (1) 或 PAGE (2) (通常是鼠标滚轮)
+        // 注意：某些鼠标驱动可能在 pixel 模式下发送数据，这里主要区分触控板滑动
+        const isZoom = e.ctrlKey || e.deltaMode !== 0;
 
-        const pos = this.getMousePos(e);
+        if (isZoom) {
+            // --- 缩放逻辑 ---
+            const zoomSpeed = 0.005;
+            // 如果是 ctrlKey (捏合)，deltaY 通常较小，需要更大的系数？
+            // 实际上浏览器已经标准化了 deltaY。
+            // 对于捏合，deltaY 为负是放大。
+            const scaleChange = 1 - e.deltaY * zoomSpeed;
 
-        const oldScale = this.scene.transform.scale[0];
-        const newScale = oldScale * scaleChange;
+            const pos = this.getMousePos(e);
 
-        if (newScale < 0.1 || newScale > 10) return;
+            const oldScale = this.scene.transform.scale[0];
+            const newScale = oldScale * scaleChange;
 
-        const mouseX = pos[0];
-        const mouseY = pos[1];
-        const transX = this.scene.transform.position[0];
-        const transY = this.scene.transform.position[1];
+            if (newScale < 0.1 || newScale > 10) return;
 
-        const newTransX = mouseX - (mouseX - transX) * scaleChange;
-        const newTransY = mouseY - (mouseY - transY) * scaleChange;
+            const mouseX = pos[0];
+            const mouseY = pos[1];
+            const transX = this.scene.transform.position[0];
+            const transY = this.scene.transform.position[1];
 
-        this.scene.scaleX = newScale;
-        this.scene.scaleY = newScale;
-        this.scene.x = newTransX;
-        this.scene.y = newTransY;
-        // this.scene.transform.dirty = true;
+            const newTransX = mouseX - (mouseX - transX) * scaleChange;
+            const newTransY = mouseY - (mouseY - transY) * scaleChange;
 
-        // this.scene.invalidate(); // 缩放变化，重绘 (Handled by setter)
+            this.scene.scaleX = newScale;
+            this.scene.scaleY = newScale;
+            this.scene.x = newTransX;
+            this.scene.y = newTransY;
+        } else {
+            // --- 平移逻辑 (触控板双指滑动) ---
+            // 反向：手指向上推(deltaY > 0)，内容应该向上跑(y 减小)？
+            // 浏览器标准：deltaY > 0 表示向下滚动。
+            // 在地图中，向下滚动 = 视口向下 = 内容向上。
+            // 所以 scene.y -= deltaY
+            
+            this.scene.x -= e.deltaX;
+            this.scene.y -= e.deltaY;
+        }
     }
 }

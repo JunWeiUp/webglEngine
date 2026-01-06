@@ -116,12 +116,12 @@ export class Node {
         }
 
         // 2. 实体节点：计算局部脏矩形
-        const oldRect = this.getBounds(false); // false = 仅自身，不递归
+        const oldRect = this.getBounds(true); // false = 仅自身，不递归
         
         changeFn();
         this.updateTransform(this.parent!.transform.worldMatrix, true);
         
-        const newRect = this.getBounds(false);
+        const newRect = this.getBounds(true);
 
         if (oldRect && newRect) {
             this.invalidate(this.unionRect(oldRect, newRect));

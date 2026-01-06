@@ -10,11 +10,14 @@ export class QuadTree {
     private objects: Node[] = [];
     private nodes: QuadTree[] = [];
 
-    constructor(bounds: Rect, capacity: number = 10, maxDepth: number = 5, depth: number = 0) {
+    private useLocalBounds: boolean = false;
+
+    constructor(bounds: Rect, capacity: number = 10, maxDepth: number = 5, depth: number = 0, useLocalBounds: boolean = false) {
         this.bounds = bounds;
         this.capacity = capacity;
         this.maxDepth = maxDepth;
         this.depth = depth;
+        this.useLocalBounds = useLocalBounds;
     }
 
     /**
@@ -39,10 +42,10 @@ export class QuadTree {
         const x = this.bounds.x;
         const y = this.bounds.y;
 
-        this.nodes[0] = new QuadTree({ x: x + subWidth, y: y, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1); // TR
-        this.nodes[1] = new QuadTree({ x: x, y: y, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1); // TL
-        this.nodes[2] = new QuadTree({ x: x, y: y + subHeight, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1); // BL
-        this.nodes[3] = new QuadTree({ x: x + subWidth, y: y + subHeight, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1); // BR
+        this.nodes[0] = new QuadTree({ x: x + subWidth, y: y, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1, this.useLocalBounds); // TR
+        this.nodes[1] = new QuadTree({ x: x, y: y, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1, this.useLocalBounds); // TL
+        this.nodes[2] = new QuadTree({ x: x, y: y + subHeight, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1, this.useLocalBounds); // BL
+        this.nodes[3] = new QuadTree({ x: x + subWidth, y: y + subHeight, width: subWidth, height: subHeight }, this.capacity, this.maxDepth, this.depth + 1, this.useLocalBounds); // BR
     }
 
     /**
@@ -51,33 +54,41 @@ export class QuadTree {
      */
     private getIndex(node: Node): number {
         let index = -1;
-        
-        // Use World Bounds
-        // Assuming node anchor is top-left and no rotation for simplicity of QuadTree index
-        // For precise bounds with rotation, we need AABB calculation.
-        // Let's use the AABB logic from Renderer/InteractionManager
-        
-        const m = node.transform.worldMatrix;
-        const w = node.width;
-        const h = node.height;
-        
-        // Calculate World AABB
-        // Note: This is expensive to do for every insert if not cached.
-        // We assume Node has updated transforms.
-        
-        // Simplified AABB (Top-Left based, ignore rotation for indexing assignment, or calculate AABB)
-        // Calculating AABB is safer.
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        const corners = [0, 0, w, 0, w, h, 0, h];
-        for(let i=0; i<4; i++) {
-            const lx = corners[i*2];
-            const ly = corners[i*2+1];
-            const wx = lx * m[0] + ly * m[3] + m[6];
-            const wy = lx * m[1] + ly * m[4] + m[7];
-            if(wx < minX) minX = wx;
-            if(wx > maxX) maxX = wx;
-            if(wy < minY) minY = wy;
-            if(wy > maxY) maxY = wy;
+        let minX, minY, maxX, maxY;
+
+        if (this.useLocalBounds) {
+            // Use Local Bounds (x, y, width, height) - ignoring rotation for simplicity in StaticLayer
+            // StaticLayer assumes children are relatively static and simple
+            minX = node.x;
+            minY = node.y;
+            maxX = node.x + node.width;
+            maxY = node.y + node.height;
+        } else {
+            // Use cached World AABB if available
+            if (node.worldAABB) {
+                minX = node.worldAABB.x;
+                minY = node.worldAABB.y;
+                maxX = minX + node.worldAABB.width;
+                maxY = minY + node.worldAABB.height;
+            } else {
+                // Fallback: Calculate World AABB
+                const m = node.transform.worldMatrix;
+                const w = node.width;
+                const h = node.height;
+                
+                minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
+                const corners = [0, 0, w, 0, w, h, 0, h];
+                for(let i=0; i<4; i++) {
+                    const lx = corners[i*2];
+                    const ly = corners[i*2+1];
+                    const wx = lx * m[0] + ly * m[3] + m[6];
+                    const wy = lx * m[1] + ly * m[4] + m[7];
+                    if(wx < minX) minX = wx;
+                    if(wx > maxX) maxX = wx;
+                    if(wy < minY) minY = wy;
+                    if(wy > maxY) maxY = wy;
+                }
+            }
         }
 
         const verticalMidpoint = this.bounds.x + (this.bounds.width / 2);

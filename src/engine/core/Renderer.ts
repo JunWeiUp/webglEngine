@@ -17,15 +17,21 @@ export class Renderer {
     
     // 批处理渲染状态
     private static readonly MAX_QUADS = 10000; // 最大批处理 Quad 数量
-    private static readonly MAX_TEXTURES = 8;  // 最大纹理单元数量
+    private maxTextures: number = 8;  // 最大纹理单元数量 (动态获取)
     private static readonly VERTEX_SIZE = 9;   // 顶点数据大小: x, y, u, v, r, g, b, a, texIndex
     
     private vertexBufferData: Float32Array; // 顶点数据缓冲区（CPU）
     private currentQuadCount: number = 0;   // 当前已填充的 Quad 数量
     private textureSlots: WebGLTexture[] = []; // 当前批次使用的纹理槽
     
-    // 静态常量，避免每次 flush 创建新数组
-    private static readonly TEXTURE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7];
+    // 性能统计
+    public stats = {
+        drawCalls: 0,
+        quadCount: 0
+    };
+
+    // 静态常量，避免每次 flush 创建新数组 (将在 initWebGL 中动态生成)
+    private textureIndices: Int32Array | number[] = [];
 
     private dynamicVertexBuffer: WebGLBuffer | null = null; // 动态顶点缓冲区（GPU）
     private indexBuffer: WebGLBuffer | null = null;         // 静态索引缓冲区（GPU）
@@ -98,9 +104,23 @@ export class Renderer {
     private initWebGL() {
         const gl = this.gl;
         
+        // 1. 获取硬件支持的最大纹理单元数
+        const maxUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+        this.maxTextures = Math.min(maxUnits, 16); // 限制到 16，避免 shader 编译过慢或超出某些限制
+        console.log(`[Renderer] Max Texture Units: ${maxUnits}, Using: ${this.maxTextures}`);
+
+        // 初始化纹理索引数组
+        this.textureIndices = new Int32Array(this.maxTextures);
+        for (let i = 0; i < this.maxTextures; i++) {
+            this.textureIndices[i] = i;
+        }
+
+        // 2. 动态生成 Fragment Shader
+        const fsSource = this.generateFragmentShader(this.maxTextures);
+
         // 编译着色器
         const vs = this.createShader(gl, gl.VERTEX_SHADER, defaultVertexShader);
-        const fs = this.createShader(gl, gl.FRAGMENT_SHADER, defaultFragmentShader);
+        const fs = this.createShader(gl, gl.FRAGMENT_SHADER, fsSource);
         
         this.shaderProgram = this.createProgram(gl, vs, fs);
         gl.useProgram(this.shaderProgram);
@@ -131,6 +151,36 @@ export class Renderer {
         
         // 设置顶点属性布局
         this.bindAttributes();
+    }
+
+    private generateFragmentShader(maxTextures: number): string {
+        let ifElseBlock = '';
+        for (let i = 0; i < maxTextures; i++) {
+            if (i === 0) {
+                ifElseBlock += `if (index == 0) color = texture2D(u_textures[0], v_texCoord);\n`;
+            } else {
+                ifElseBlock += `    else if (index == ${i}) color = texture2D(u_textures[${i}], v_texCoord);\n`;
+            }
+        }
+
+        return `
+precision mediump float;
+
+varying vec2 v_texCoord;
+varying vec4 v_color;
+varying float v_textureIndex;
+
+uniform sampler2D u_textures[${maxTextures}];
+
+void main() {
+    vec4 color = vec4(1.0);
+    int index = int(v_textureIndex + 0.5);
+    
+    ${ifElseBlock}
+    
+    gl_FragColor = color * v_color;
+}
+`;
     }
 
     /**
@@ -194,6 +244,10 @@ export class Renderer {
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
     public render(scene: Node, dirtyRect?: Rect) {
+        // 重置统计
+        this.stats.drawCalls = 0;
+        this.stats.quadCount = 0;
+
         // 1. 设置 WebGL Scissor Test (裁剪测试)
         if (dirtyRect) {
             this.gl.enable(this.gl.SCISSOR_TEST);
@@ -388,7 +442,7 @@ export class Renderer {
         // 设置 u_textures uniform 数组
         const uTexturesLocation = gl.getUniformLocation(program, "u_textures");
         if (uTexturesLocation) {
-             gl.uniform1iv(uTexturesLocation, Renderer.TEXTURE_INDICES);
+             gl.uniform1iv(uTexturesLocation, this.textureIndices);
         }
 
         // 设置投影矩阵
@@ -397,6 +451,10 @@ export class Renderer {
 
         // 执行绘制调用 (Draw Call)
         gl.drawElements(gl.TRIANGLES, this.currentQuadCount * 6, gl.UNSIGNED_SHORT, 0);
+
+        // 统计
+        this.stats.drawCalls++;
+        this.stats.quadCount += this.currentQuadCount;
 
         // 重置批处理状态
         this.currentQuadCount = 0;
@@ -426,7 +484,7 @@ export class Renderer {
         let textureIndex = this.textureSlots.indexOf(texture);
         
         if (textureIndex === -1) {
-            if (this.textureSlots.length >= Renderer.MAX_TEXTURES) {
+            if (this.textureSlots.length >= this.maxTextures) {
                 this.flush();
                 textureIndex = 0;
                 this.textureSlots.push(texture);
@@ -484,7 +542,7 @@ export class Renderer {
         
         if (textureIndex === -1) {
             // 如果纹理槽已满，先 Flush
-            if (this.textureSlots.length >= Renderer.MAX_TEXTURES) {
+            if (this.textureSlots.length >= this.maxTextures) {
                 this.flush();
                 textureIndex = 0;
                 this.textureSlots.push(texture);

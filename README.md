@@ -4,14 +4,25 @@
 
 ## ✨ 核心特性 (Features)
 
-*   **高性能渲染核心**
-    *   **原生 WebGL 批处理 (Batch Rendering)**：自动合并 Draw Call，支持单次提交上万个 Quad。
-    *   **视锥体剔除 (Frustum Culling)**：基于 AABB 包围盒，自动剔除屏幕外的对象，极大降低 GPU 负载。
-    *   **智能矩阵更新**：引入 Dirty Flag 机制，仅在 Transform 变化时重新计算矩阵，避免无效的数学运算。
+*   **高性能渲染核心 (Rendering Core)**
+    *   **原生 WebGL 批处理 (Auto Batching)**：自动合并 Draw Call，支持单次提交上万个 Quad，极大减少 GPU 通信开销。
+    *   **混合渲染管线 (Hybrid Pipeline)**：清晰分离 **WebGL Pass** (高性能场景) 和 **Canvas 2D Pass** (高质量矢量 UI/辅助线)，兼顾性能与绘图质量。
+    *   **零 GC 渲染循环 (Zero-GC Loop)**：热路径完全移除临时对象分配（如 `new Float32Array`），利用共享缓冲和直接内存写入，消除 GC 造成的卡顿。
+    *   **智能视锥体剔除 (Smart Culling)**：复用 Transform 更新阶段缓存的 **World AABB**，避免在剔除阶段重复进行昂贵的矩阵乘法计算。
+
+*   **极速文本渲染 (Text Rendering)**
+    *   **多页纹理图集 (Multi-Page Texture Atlas)**：自动将离屏 Canvas 绘制的文本合并到 2048x2048 的大纹理中，支持动态扩容，彻底解决纹理切换频繁和图集溢出问题。
+    *   **Data URL 零网络加载**：针对 Base64 图片实现纯内存解析，绕过 Fetch API，提升加载稳定性。
+
+*   **智能脏矩形 (Smart Dirty Rect)**
+    *   **区分式重绘策略**：
+        *   **全屏重绘**：针对场景平移/缩放（根节点变换），直接全屏刷新，避免递归计算数万个节点的包围盒。
+        *   **局部重绘**：针对单个实体节点移动，仅计算 O(1) 的局部脏矩形，实现像素级精确更新。
+    *   **辅助层独立刷新**：交互 UI（选框、高亮）拥有独立的脏矩形生命周期，互不干扰。
 
 *   **强大的场景图 (Scene Graph)**
     *   支持层级嵌套 (`Node`, `Container`)。
-    *   内置基础组件：`Sprite` (精灵), `Text` (文本, 基于 Canvas 2D 缓存), `TileLayer` (瓦片地图层)。
+    *   内置基础组件：`Sprite` (精灵), `Text` (文本), `TileLayer` (瓦片地图层)。
     *   **分帧加载 (Time Slicing)**：支持将海量节点的创建任务分散到多帧执行，消除首屏卡顿。
 
 *   **完善的交互系统**
@@ -19,14 +30,10 @@
     *   **高级交互**：
         *   **框选 (Box Selection)**：按住 Shift 拖拽进行多选。
         *   **层级变更 (Reparenting)**：将物体拖拽到另一个容器上即可改变父子关系。
-        *   **交互剪枝**：基于包围盒的快速点击检测优化，支持 40,000+ 节点的实时流畅交互。
+        *   **交互剪枝**：基于包围盒的快速点击检测优化。
 
 *   **调试与开发工具**
-    *   **大纲视图 (Outline View)**：
-        *   实时显示场景层级结构。
-        *   **虚拟滚动 (Virtual Scrolling)**：仅渲染可视区域的 DOM 节点，轻松支撑数万条数据。
-        *   **DOM 复用**：对象池机制，减少 GC 和 Layout 开销。
-        *   **自动聚焦**：在画布选中物体时，大纲树自动展开并滚动到对应条目；大纲树选中物体时，画布自动平移居中。
+    *   **大纲视图 (Outline View)**：实时显示场景层级结构，支持虚拟滚动。
     *   **辅助图层 (Auxiliary Layer)**：可视化显示包围盒、选中框和拖拽目标。
     *   **性能监控**：集成 Stats.js 监控 FPS。
 
@@ -34,10 +41,10 @@
 
 本项目包含多项针对海量数据的优化策略：
 
-1.  **渲染剪枝**：如果父容器完全在屏幕外，渲染器将直接跳过整个子树的遍历。
-2.  **交互剪枝**：点击检测 (HitTest) 时，如果点不在父容器的包围盒内，直接跳过对子节点的检测。
-3.  **资源去重**：大量 Sprite 共享纹理资源，减少显存占用。
-4.  **按需渲染 (On-Demand Rendering)**：仅在画面变化（交互、加载、动画）时触发渲染循环，静止状态下 0 GPU 占用。
+1.  **渲染剪枝**：利用缓存的 World AABB，在首帧和后续帧均能高效剔除视口外的物体。
+2.  **资源去重**：大量 Sprite 共享纹理资源；所有 Text 共享全局图集。
+3.  **按需渲染 (On-Demand Rendering)**：仅在画面变化（交互、加载、动画）时触发渲染循环，静止状态下 0 GPU 占用。
+4.  **无损变换**：Node 属性 (`x/y/scale/rotation`) 更新时直接触发失效，无需昂贵的 `getBounds` 递归。
 
 ## 🛠️ 安装与运行
 
@@ -65,29 +72,25 @@ npm run dev
 *   **多选/框选**：按住 **Shift** 键并拖拽鼠标画框。
 *   **移动物体**：选中物体后拖拽。
 *   **改变层级**：将物体 A 拖拽并放置在物体 B 上，A 将成为 B 的子节点。
-*   **大纲树操作**：
-    *   点击列表项选中物体。
-    *   点击箭头折叠/展开层级。
-    *   选中物体后，画布会自动跳转使其居中。
 
 ## 📂 项目结构
 
 ```
 src/
 ├── engine/
-│   ├── core/           # 核心渲染逻辑 (Renderer, WebGL Shader)
+│   ├── core/           # 核心渲染逻辑 (Renderer, WebGL Shader, TextureAtlas)
 │   ├── display/        # 显示对象 (Node, Sprite, Container, Text)
 │   ├── events/         # 交互管理 (InteractionManager)
 │   ├── ui/             # 调试 UI (OutlineView)
-│   └── utils/          # 工具类
+│   └── utils/          # 工具类 (AtlasManager, TextureManager)
 ├── main.ts             # 入口文件 (场景初始化, 测试数据生成)
 └── style.css           # 基础样式
 ```
 
-## 📝 待办 / 计划
+## 📝 待办 / 计划 (Future Optimizations)
 
-*   [x] 引入 Spatial Partitioning (QuadTree) 加速框选查询。
-*   [x] 支持纹理图集 (Texture Atlas) 与 `Texture` 类封装。
-*   [x] 实现脏矩形渲染 (Dirty Rect Rendering) 以进一步优化局部更新。
-
-
+*   [ ] **静态批处理 (Static Batching)**: 对于不移动的背景物体（如 TileLayer），预先合并顶点数据，进一步减少 CPU 提交开销。
+*   [ ] **空间索引 (Spatial Indexing)**: 引入 QuadTree 或 BVH，将剔除和交互检测复杂度从 O(N) 降低到 O(logN)。
+*   [ ] **文本位图化 (SDF Fonts)**: 引入 Signed Distance Field 字体渲染，提供更高性能和无限放大清晰度。
+*   [ ] **多纹理排序 (Texture Sorting)**: 优化渲染顺序，尽量让使用相同纹理的物体靠在一起绘制，减少 Flush 次数。
+*   [ ] **WebGPU 支持**: 探索 WebGPU 后端以利用 Compute Shader 进行大规模粒子模拟。
