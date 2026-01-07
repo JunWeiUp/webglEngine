@@ -46,6 +46,7 @@ export class Text extends Node {
 
     private updateTexture(renderer: Renderer) {
         if (!this._contentDirty && this._texture) return;
+        console.log("updateTexture")
 
         // 确保 AtlasManager 已初始化
         const atlas = AtlasManager.getInstance();

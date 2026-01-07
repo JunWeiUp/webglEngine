@@ -251,17 +251,26 @@ void main() {
         // 1. 设置 WebGL Scissor Test (裁剪测试)
         if (dirtyRect) {
             this.gl.enable(this.gl.SCISSOR_TEST);
+            
+            // 计算 dirtyRect 的边界 (屏幕坐标)
+            const left = Math.floor(dirtyRect.x);
+            const top = Math.floor(dirtyRect.y);
+            const right = Math.ceil(dirtyRect.x + dirtyRect.width);
+            const bottom = Math.ceil(dirtyRect.y + dirtyRect.height);
+
             // WebGL Scissor 原点在左下角，而 Rect 是左上角
             // 需要转换 Y 轴
-            // 确保 Scissor 区域完全覆盖 dirtyRect (向下取整 Y，向上取整 H)
-            const scissorY = this.height - (dirtyRect.y + dirtyRect.height);
+            const width = right - left;
+            const height = bottom - top;
+            const scissorX = left;
+            const scissorY = this.height - bottom;
             
-            const x = Math.floor(Math.max(0, dirtyRect.x));
-            const y = Math.floor(Math.max(0, scissorY));
-            const w = Math.ceil(Math.min(this.width - x, dirtyRect.width));
-            const h = Math.ceil(Math.min(this.height - y, dirtyRect.height));
+            // 限制在画布范围内
+            const x = Math.max(0, scissorX);
+            const y = Math.max(0, scissorY);
+            const w = Math.min(this.width - x, width + (scissorX < 0 ? scissorX : 0));
+            const h = Math.min(this.height - y, height + (scissorY < 0 ? scissorY : 0));
 
-            console.log("dirtyRect", x, y, w, h);
             this.gl.scissor(x, y, w, h);
         } else {
             this.gl.disable(this.gl.SCISSOR_TEST);
@@ -313,9 +322,8 @@ void main() {
         }
 
         if (isVisible) {
-            // 调用节点的 WebGL 渲染方法（如果存在）
             if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                (node as any).renderWebGL(this);
+                (node as any).renderWebGL(this, cullingRect);
             }
         }
 

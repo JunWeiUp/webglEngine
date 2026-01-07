@@ -3,7 +3,6 @@ import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
-import Stats from 'stats.js';
 import { PerfMonitor } from './utils/perf_monitor';
 import type { Rect } from './core/Rect';
 
@@ -112,7 +111,8 @@ export class Engine {
         if (this.fullInvalidate) return; // 已经全屏脏了，无需处理
 
         // 加上一点 Padding，防止边缘残留 (抗锯齿/纹理过滤溢出/阴影)
-        const padding = 2;
+        // 增加到 5 像素以应对更极端的情况
+        const padding = 5;
         const paddedRect = {
             x: Math.floor(rect.x - padding),
             y: Math.floor(rect.y - padding),

@@ -36,7 +36,16 @@ export class AuxiliaryLayer {
     render(ctx: CanvasRenderingContext2D, scene: Node, dirtyRect?: Rect) {
         // Reset transform to identity to draw in screen space
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        if (dirtyRect) {
+            // 使用 Math.floor 和 Math.ceil 确保物理像素层面的完全清除
+            const x = Math.floor(dirtyRect.x);
+            const y = Math.floor(dirtyRect.y);
+            const w = Math.ceil(dirtyRect.x + dirtyRect.width) - x;
+            const h = Math.ceil(dirtyRect.y + dirtyRect.height) - y;
+            ctx.clearRect(x, y, w, h);
+        } else {
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        }
 
         // 1. Draw Selection
         // Iterate over all selected nodes

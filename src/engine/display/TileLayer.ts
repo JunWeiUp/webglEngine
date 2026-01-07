@@ -1,5 +1,6 @@
 import { Node } from './Node';
 import type { IRenderer } from '../core/IRenderer';
+import type { Rect } from '../core/Rect';
 import { TextureManager } from '../utils/TextureManager';
 import { mat3, vec2 } from 'gl-matrix';
 
@@ -48,7 +49,7 @@ export class TileLayer extends Node {
         this.baseZoom = baseZoom;
     }
 
-    renderWebGL(renderer: IRenderer) {
+    renderWebGL(renderer: IRenderer, cullingRect?: Rect) {
         // 计算全局缩放系数以确定 LOD (Level of Detail)
         // 世界矩阵的缩放分量 (假设大致均匀缩放)
         // m00 是 scaleX (如果没有旋转)。如果有旋转，则是第 0 列的长度。
@@ -68,12 +69,16 @@ export class TileLayer extends Node {
         const renderTileSize = this.tileSize * scaleFactor;
 
         // 1. 计算局部空间的可见范围
-        // 将屏幕四个角转换到局部空间
+        const sx = cullingRect ? cullingRect.x : 0;
+        const sy = cullingRect ? cullingRect.y : 0;
+        const sw = cullingRect ? cullingRect.width : renderer.gl.canvas.width;
+        const sh = cullingRect ? cullingRect.height : renderer.gl.canvas.height;
+
         const screenCorners = [
-            vec2.fromValues(0, 0),
-            vec2.fromValues(renderer.gl.canvas.width, 0),
-            vec2.fromValues(renderer.gl.canvas.width, renderer.gl.canvas.height),
-            vec2.fromValues(0, renderer.gl.canvas.height)
+            vec2.fromValues(sx, sy),
+            vec2.fromValues(sx + sw, sy),
+            vec2.fromValues(sx + sw, sy + sh),
+            vec2.fromValues(sx, sy + sh)
         ];
 
         // 逆转世界矩阵
