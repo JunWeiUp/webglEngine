@@ -39,6 +39,9 @@ export class Node {
     /** 节点名称 (调试用) */
     public name: string = "Node";
 
+    /** 是否需要更新子树变换 */
+    private _subtreeDirty: boolean = true;
+
     /** 关联的四叉树节点 (用于高效更新/删除) */
     public quadTreeNode: any = null;
 
@@ -104,9 +107,22 @@ export class Node {
 
     // --- Getters/Setters for Dirty Rect Optimization ---
 
+    /**
+     * 标记节点变换为脏，并通知父节点子树已脏
+     */
+    public markTransformDirty() {
+        this.transform.dirty = true;
+        let p = this.parent;
+        while (p && !p._subtreeDirty) {
+            p._subtreeDirty = true;
+            p = p.parent;
+        }
+    }
+
     get x(): number { return this.transform.position[0]; }
     set x(value: number) {
         if (this.transform.position[0] !== value) {
+            this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
             if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
@@ -115,6 +131,7 @@ export class Node {
     get y(): number { return this.transform.position[1]; }
     set y(value: number) {
         if (this.transform.position[1] !== value) {
+            this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
             if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
@@ -123,6 +140,7 @@ export class Node {
     get scaleX(): number { return this.transform.scale[0]; }
     set scaleX(value: number) {
         if (this.transform.scale[0] !== value) {
+            this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setScale(value, this.scaleY));
         }
     }
@@ -130,6 +148,7 @@ export class Node {
     get scaleY(): number { return this.transform.scale[1]; }
     set scaleY(value: number) {
         if (this.transform.scale[1] !== value) {
+            this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setScale(this.scaleX, value));
         }
     }
@@ -137,6 +156,7 @@ export class Node {
     get rotation(): number { return this.transform.rotation; }
     set rotation(value: number) {
         if (this.transform.rotation !== value) {
+            this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setRotation(value));
         }
     }
@@ -228,6 +248,9 @@ export class Node {
         }
         child.parent = this;
         this.children.push(child);
+        
+        // 结构变化，标记子树脏
+        this.markTransformDirty();
 
         // 如果根节点有空间索引，将子节点及其子树加入索引
         let root = this.getRoot();
@@ -247,6 +270,9 @@ export class Node {
     removeChild(child: Node) {
         const index = this.children.indexOf(child);
         if (index !== -1) {
+            // 结构变化，标记子树脏
+            this.markTransformDirty();
+
             // 从空间索引移除
             if (child.quadTreeNode) {
                 child.quadTreeNode.remove(child);
@@ -278,16 +304,21 @@ export class Node {
      * @param parentDirty 父节点是否发生变化
      */
     updateTransform(parentWorldMatrix: mat3 | null, parentDirty: boolean = false) {
+        // 性能核心：如果父级未变、自身未变且子树也未标记为脏，则跳过整个分支
+        if (!parentDirty && !this.transform.dirty && !this._subtreeDirty) {
+            return;
+        }
+
         // 1. 更新自身的局部矩阵 (如果 dirty)
         const localDirty = this.transform.dirty;
-        this.transform.updateLocalTransform(); // 会清除 dirty
+        this.transform.updateLocalTransform(); // 会清除 transform.dirty
 
         let worldDirty = parentDirty;
 
         if (localDirty || parentDirty) {
             this.transform.updateWorldTransform(parentWorldMatrix);
             worldDirty = true;
-            
+
             // 2. 更新 World AABB (如果节点有尺寸)
             if (this.width > 0 && this.height > 0) {
                 this.updateWorldAABB();
@@ -298,10 +329,15 @@ export class Node {
 
         // 3. 递归更新所有子节点
         // 如果 worldDirty 为 true，子节点必须更新
-        // 如果 worldDirty 为 false，子节点仅在自身 dirty 时更新
-        for (const child of this.children) {
-            child.updateTransform(this.transform.worldMatrix, worldDirty);
+        // 如果 worldDirty 为 false，仅当 _subtreeDirty 为 true 时才进入子节点
+        if (worldDirty || this._subtreeDirty) {
+            for (const child of this.children) {
+                child.updateTransform(this.transform.worldMatrix, worldDirty);
+            }
         }
+
+        // 清除子树脏标记
+        this._subtreeDirty = false;
     }
 
     /**

@@ -314,7 +314,7 @@ void main() {
 
         // 更新场景的世界变换矩阵
         const t0 = performance.now();
-        scene.updateTransform(null, true); // 根节点强制更新
+        scene.updateTransform(null, false); // 根节点使用脏标记按需更新
         this.stats.times.transform = performance.now() - t0;
 
         // 3. 决定渲染策略：如果有空间索引则使用索引查询，否则使用递归遍历
