@@ -19,7 +19,7 @@ export class AtlasManager {
     private static instance: AtlasManager;
 
     private pages: AtlasPage[] = [];
-    private gl: WebGLRenderingContext | null = null;
+    private gl: WebGL2RenderingContext | null = null;
     private readonly ATLAS_SIZE = 2048;
 
     // 记录已分配的区域，以便在重置时通知使用者失效 (简单起见，目前只支持 Append，满则清空)
@@ -55,7 +55,7 @@ export class AtlasManager {
         return page;
     }
 
-    private initPageTexture(gl: WebGLRenderingContext, page: AtlasPage) {
+    private initPageTexture(gl: WebGL2RenderingContext, page: AtlasPage) {
         if (page.texture) return;
         page.texture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, page.texture);
@@ -73,7 +73,7 @@ export class AtlasManager {
         return AtlasManager.instance;
     }
 
-    public init(gl: WebGLRenderingContext) {
+    public init(gl: WebGL2RenderingContext) {
         if (this.gl === gl) return;
         this.gl = gl;
         

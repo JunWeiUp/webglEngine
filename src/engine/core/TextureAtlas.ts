@@ -7,7 +7,7 @@ export class TextureAtlas {
 
     constructor() {}
 
-    static async load(gl: WebGLRenderingContext, jsonUrl: string, imageUrl: string): Promise<TextureAtlas> {
+    static async load(gl: WebGL2RenderingContext, jsonUrl: string, imageUrl: string): Promise<TextureAtlas> {
         const atlas = new TextureAtlas();
         
         // Load Base Texture

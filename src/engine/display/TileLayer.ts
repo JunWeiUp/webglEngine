@@ -249,7 +249,7 @@ export class TileLayer extends Node {
     /**
      * 执行瓦片垃圾回收
      */
-    private performGC(gl: WebGLRenderingContext) {
+    private performGC(gl: WebGL2RenderingContext) {
         if (this.tileTextures.size <= TileLayer.MAX_TILES) return;
 
         // 按最后使用时间排序

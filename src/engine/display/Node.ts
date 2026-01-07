@@ -39,6 +39,45 @@ export class Node {
     /** 节点名称 (调试用) */
     public name: string = "Node";
 
+    /** 关联的四叉树节点 (用于高效更新/删除) */
+    public quadTreeNode: any = null;
+
+    /** 
+     * 空间索引 (仅根节点或需要独立索引的容器持有)
+     */
+    private _spatialIndex: any = null;
+
+    public get spatialIndex(): any {
+        return this._spatialIndex;
+    }
+
+    public set spatialIndex(value: any) {
+        this._spatialIndex = value;
+        // 如果设置了空间索引，自动将现有子树加入索引
+        if (value) {
+            this.traverse((node) => {
+                if (node !== this) {
+                    value.insert(node);
+                }
+            });
+        }
+    }
+
+    /** 
+     * 遍历节点树
+     */
+    public traverse(callback: (node: Node) => void) {
+        callback(this);
+        for (const child of this.children) {
+            child.traverse(callback);
+        }
+    }
+
+    /** LOD 控制：可见的最小缩放比例 */
+    public minVisibleScale: number = 0;
+    /** LOD 控制：可见的最大缩放比例 */
+    public maxVisibleScale: number = Infinity;
+
     /** 
      * 失效回调
      * 当该节点需要重绘时调用（通常仅在根节点设置此回调，用于通知引擎）
@@ -69,6 +108,7 @@ export class Node {
     set x(value: number) {
         if (this.transform.position[0] !== value) {
             this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
+            if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
@@ -76,6 +116,7 @@ export class Node {
     set y(value: number) {
         if (this.transform.position[1] !== value) {
             this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
+            if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
@@ -187,9 +228,15 @@ export class Node {
         }
         child.parent = this;
         this.children.push(child);
+
+        // 如果根节点有空间索引，将子节点及其子树加入索引
+        let root = this.getRoot();
+        if (root.spatialIndex) {
+            child.traverse(n => root.spatialIndex.insert(n));
+        }
+
         if (!first) {
             this.invalidate(); // 结构变化需要重绘
-
         }
     }
 
@@ -200,10 +247,29 @@ export class Node {
     removeChild(child: Node) {
         const index = this.children.indexOf(child);
         if (index !== -1) {
+            // 从空间索引移除
+            if (child.quadTreeNode) {
+                child.quadTreeNode.remove(child);
+            } else {
+                // 如果没有直接关联的 quadTreeNode，尝试从根索引深度移除
+                let root = this.getRoot();
+                if (root.spatialIndex) {
+                    child.traverse(n => root.spatialIndex.remove(n));
+                }
+            }
+
             this.children.splice(index, 1);
             child.parent = null;
             this.invalidate(); // 结构变化需要重绘
         }
+    }
+
+    private getRoot(): Node {
+        let node: Node = this;
+        while (node.parent) {
+            node = node.parent;
+        }
+        return node;
     }
 
     /**

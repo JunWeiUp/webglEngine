@@ -3,7 +3,7 @@ import { Texture } from '../core/Texture';
 export class TextureManager {
     private static cache: Map<string, Texture> = new Map();
 
-    static loadTexture(gl: WebGLRenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
+    static loadTexture(gl: WebGL2RenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         if (this.cache.has(url)) {
             return Promise.resolve(this.cache.get(url)!);
         }
@@ -50,7 +50,7 @@ export class TextureManager {
         });
     }
 
-    private static async loadTextureBitmap(gl: WebGLRenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
+    private static async loadTextureBitmap(gl: WebGL2RenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         try {
             let blob: Blob;
 
@@ -100,7 +100,7 @@ export class TextureManager {
         return new Blob([ab], { type: mimeString });
     }
 
-    static createTextureFromSource(gl: WebGLRenderingContext, source: TexImageSource): WebGLTexture | null {
+    static createTextureFromSource(gl: WebGL2RenderingContext, source: TexImageSource): WebGLTexture | null {
         const texture = gl.createTexture();
         if (!texture) return null;
 
@@ -116,7 +116,7 @@ export class TextureManager {
         return texture;
     }
 
-    static createWhiteTexture(gl: WebGLRenderingContext): Texture {
+    static createWhiteTexture(gl: WebGL2RenderingContext): Texture {
         const key = "__white__";
         if (this.cache.has(key)) return this.cache.get(key)!;
 
@@ -134,7 +134,7 @@ export class TextureManager {
      * Dispose a texture by URL and remove from cache.
      * This is crucial for LRU cache implementation to free GPU memory.
      */
-    static disposeTexture(gl: WebGLRenderingContext, url: string) {
+    static disposeTexture(gl: WebGL2RenderingContext, url: string) {
         if (this.cache.has(url)) {
             const texture = this.cache.get(url)!;
             // Only dispose if it's not the white placeholder (which might be shared)

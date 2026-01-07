@@ -1,7 +1,7 @@
 import { Sprite } from './Sprite';
 
 export class Container extends Sprite {
-    constructor(gl: WebGLRenderingContext) {
+    constructor(gl: WebGL2RenderingContext) {
         super(gl);
         // Container defaults:
         // We might want it to be transparent by default if it's just a group?

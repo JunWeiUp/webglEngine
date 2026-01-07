@@ -234,3 +234,58 @@ createButton("添加容器 (Container)", () => {
     engine.scene.addChild(container);
     console.log(`Created ${container.name}`);
 });
+
+// ==========================================
+// Performance Stats & Debug Tools
+// ==========================================
+
+const statsContainer = document.createElement('div');
+statsContainer.style.position = 'absolute';
+statsContainer.style.bottom = '10px';
+statsContainer.style.left = '10px';
+statsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+statsContainer.style.color = '#00ff00';
+statsContainer.style.padding = '10px';
+statsContainer.style.fontFamily = 'monospace';
+statsContainer.style.fontSize = '12px';
+statsContainer.style.pointerEvents = 'none';
+statsContainer.style.zIndex = '1000';
+document.body.appendChild(statsContainer);
+
+let lastTime = performance.now();
+let frames = 0;
+let fps = 0;
+
+function updateStats() {
+    const now = performance.now();
+    frames++;
+    if (now > lastTime + 1000) {
+        fps = Math.round((frames * 1000) / (now - lastTime));
+        lastTime = now;
+        frames = 0;
+    }
+
+    const glStats = engine.renderer.stats;
+    const scene = engine.scene;
+    
+    let totalNodes = 0;
+    scene.traverse(() => totalNodes++);
+
+    statsContainer.innerHTML = `
+        FPS: ${fps}<br>
+        Draw Calls: ${glStats.drawCalls}<br>
+        Quads: ${glStats.quadCount}<br>
+        Total Nodes: ${totalNodes}<br>
+        WebGL Version: 2.0 (GLSL 300 ES)
+    `;
+    requestAnimationFrame(updateStats);
+}
+updateStats();
+
+// Debug Toggle for QuadTree
+createButton("显示四叉树 (Debug)", () => {
+    if (engine.scene.spatialIndex) {
+        engine.scene.spatialIndex.debug = !engine.scene.spatialIndex.debug;
+        engine.scene.invalidate();
+    }
+});

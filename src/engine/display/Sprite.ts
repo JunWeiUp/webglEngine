@@ -40,7 +40,7 @@ export class Sprite extends Node {
      * @param gl WebGL 上下文
      * @param textureOrUrl 纹理对象或图片路径
      */
-    constructor(gl: WebGLRenderingContext, textureOrUrl?: string | Texture) {
+    constructor(gl: WebGL2RenderingContext, textureOrUrl?: string | Texture) {
         super();
         if (typeof textureOrUrl === 'string') {
             this.textureUrl = textureOrUrl;

@@ -8,7 +8,7 @@ import type { Rect } from './Rect';
  * 负责 WebGL 上下文管理、着色器编译、批处理渲染以及场景树的遍历渲染。
  */
 export class Renderer {
-    public gl: WebGLRenderingContext;
+    public gl: WebGL2RenderingContext;
     public ctx: CanvasRenderingContext2D;
     public width: number;
     public height: number;
@@ -53,7 +53,14 @@ export class Renderer {
         canvasGL.style.left = '0';
         container.appendChild(canvasGL);
         // 开启 preserveDrawingBuffer 以支持局部重绘 (Dirty Rect Rendering)
-        this.gl = canvasGL.getContext('webgl', { preserveDrawingBuffer: true })!;
+        // 升级到 WebGL 2
+        this.gl = canvasGL.getContext('webgl2', { preserveDrawingBuffer: true })!;
+        if (!this.gl) {
+            console.error("WebGL 2 not supported, falling back to WebGL 1");
+            // If we really wanted to fallback, we'd need to change the type of this.gl to WebGLRenderingContext | WebGL2RenderingContext
+            // But for this task we assume WebGL 2 is desired.
+            this.gl = (canvasGL.getContext('webgl', { preserveDrawingBuffer: true }) as any) as WebGL2RenderingContext;
+        }
 
         // 创建 2D Canvas (用于辅助绘制，如文本、调试框)
         const canvas2D = document.createElement('canvas');
@@ -115,11 +122,31 @@ export class Renderer {
             this.textureIndices[i] = i;
         }
 
-        // 2. 动态生成 Fragment Shader
+        // 2. 动态生成 Fragment Shader (GLSL 3.00 ES)
         const fsSource = this.generateFragmentShader(this.maxTextures);
 
+        // 3. 定义 Vertex Shader (GLSL 3.00 ES)
+        const vsSource = `#version 300 es
+layout(location = 0) in vec2 a_position;
+layout(location = 1) in vec2 a_texCoord;
+layout(location = 2) in vec4 a_color;
+layout(location = 3) in float a_textureIndex;
+
+uniform mat3 u_projectionMatrix;
+
+out vec2 v_texCoord;
+out vec4 v_color;
+out float v_textureIndex;
+
+void main() {
+    v_texCoord = a_texCoord;
+    v_color = a_color;
+    v_textureIndex = a_textureIndex;
+    gl_Position = vec4((u_projectionMatrix * vec3(a_position, 1.0)).xy, 0.0, 1.0);
+}`;
+
         // 编译着色器
-        const vs = this.createShader(gl, gl.VERTEX_SHADER, defaultVertexShader);
+        const vs = this.createShader(gl, gl.VERTEX_SHADER, vsSource);
         const fs = this.createShader(gl, gl.FRAGMENT_SHADER, fsSource);
         
         this.shaderProgram = this.createProgram(gl, vs, fs);
@@ -157,20 +184,22 @@ export class Renderer {
         let ifElseBlock = '';
         for (let i = 0; i < maxTextures; i++) {
             if (i === 0) {
-                ifElseBlock += `if (index == 0) color = texture2D(u_textures[0], v_texCoord);\n`;
+                ifElseBlock += `if (index == 0) color = texture(u_textures[0], v_texCoord);\n`;
             } else {
-                ifElseBlock += `    else if (index == ${i}) color = texture2D(u_textures[${i}], v_texCoord);\n`;
+                ifElseBlock += `    else if (index == ${i}) color = texture(u_textures[${i}], v_texCoord);\n`;
             }
         }
 
-        return `
+        return `#version 300 es
 precision mediump float;
 
-varying vec2 v_texCoord;
-varying vec4 v_color;
-varying float v_textureIndex;
+in vec2 v_texCoord;
+in vec4 v_color;
+in float v_textureIndex;
 
 uniform sampler2D u_textures[${maxTextures}];
+
+out vec4 fragColor;
 
 void main() {
     vec4 color = vec4(1.0);
@@ -178,7 +207,7 @@ void main() {
     
     ${ifElseBlock}
     
-    gl_FragColor = color * v_color;
+    fragColor = color * v_color;
 }
 `;
     }
@@ -188,33 +217,26 @@ void main() {
      */
     private bindAttributes() {
         const gl = this.gl;
-        const program = this.shaderProgram!;
         const stride = Renderer.VERTEX_SIZE * 4; // 每个顶点的字节数
 
-        // a_position (2 floats)
-        const positionLocation = gl.getAttribLocation(program, "a_position");
-        gl.enableVertexAttribArray(positionLocation);
-        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, stride, 0);
+        // a_position (location = 0)
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, stride, 0);
 
-        // a_texCoord (2 floats)
-        const texCoordLocation = gl.getAttribLocation(program, "a_texCoord");
-        gl.enableVertexAttribArray(texCoordLocation);
-        gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, stride, 2 * 4);
+        // a_texCoord (location = 1)
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 2 * 4);
 
-        // a_color (4 floats)
-        const colorLocation = gl.getAttribLocation(program, "a_color");
-        gl.enableVertexAttribArray(colorLocation);
-        gl.vertexAttribPointer(colorLocation, 4, gl.FLOAT, false, stride, 4 * 4);
+        // a_color (location = 2)
+        gl.enableVertexAttribArray(2);
+        gl.vertexAttribPointer(2, 4, gl.FLOAT, false, stride, 4 * 4);
 
-        // a_textureIndex (1 float)
-        const textureIndexLocation = gl.getAttribLocation(program, "a_textureIndex");
-        if (textureIndexLocation !== -1) {
-            gl.enableVertexAttribArray(textureIndexLocation);
-            gl.vertexAttribPointer(textureIndexLocation, 1, gl.FLOAT, false, stride, 8 * 4);
-        }
+        // a_textureIndex (location = 3)
+        gl.enableVertexAttribArray(3);
+        gl.vertexAttribPointer(3, 1, gl.FLOAT, false, stride, 8 * 4);
     }
 
-    private createShader(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
+    private createShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
         const shader = gl.createShader(type)!;
         gl.shaderSource(shader, source);
         gl.compileShader(shader);
@@ -226,7 +248,7 @@ void main() {
         return shader;
     }
 
-    private createProgram(gl: WebGLRenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram {
+    private createProgram(gl: WebGL2RenderingContext, vs: WebGLShader, fs: WebGLShader): WebGLProgram {
         const program = gl.createProgram()!;
         gl.attachShader(program, vs);
         gl.attachShader(program, fs);
@@ -284,11 +306,75 @@ void main() {
         // 更新场景的世界变换矩阵
         scene.updateTransform(null, true); // 根节点强制更新
 
-        // 递归渲染节点树
-        this.renderNodeWebGL(scene, dirtyRect);
+        // 3. 决定渲染策略：如果有空间索引则使用索引查询，否则使用递归遍历
+        if (scene.spatialIndex) {
+            this.renderSceneWithSpatialIndex(scene, dirtyRect);
+        } else {
+            this.renderNodeWebGL(scene, dirtyRect);
+        }
         
         // 渲染结束，强制刷新剩余的批次
         this.flush();
+    }
+
+    /**
+     * 使用空间索引优化渲染流程
+     */
+    private renderSceneWithSpatialIndex(scene: Node, cullingRect?: Rect) {
+        // 1. 确定查询范围 (场景空间)
+        const viewX = cullingRect ? cullingRect.x : 0;
+        const viewY = cullingRect ? cullingRect.y : 0;
+        const viewW = cullingRect ? cullingRect.width : this.width;
+        const viewH = cullingRect ? cullingRect.height : this.height;
+
+        // 将屏幕坐标转换为场景局部坐标 (考虑视口变换)
+        const invScene = mat3.create();
+        mat3.invert(invScene, scene.transform.worldMatrix);
+
+        const corners = [
+            [viewX, viewY],
+            [viewX + viewW, viewY],
+            [viewX + viewW, viewY + viewH],
+            [viewX, viewY + viewH]
+        ];
+
+        let sMinX = Infinity, sMinY = Infinity, sMaxX = -Infinity, sMaxY = -Infinity;
+        for (const p of corners) {
+            const lp = [0, 0];
+            lp[0] = p[0] * invScene[0] + p[1] * invScene[3] + invScene[6];
+            lp[1] = p[0] * invScene[1] + p[1] * invScene[4] + invScene[7];
+            
+            if (lp[0] < sMinX) sMinX = lp[0];
+            if (lp[0] > sMaxX) sMaxX = lp[0];
+            if (lp[1] < sMinY) sMinY = lp[1];
+            if (lp[1] > sMaxY) sMaxY = lp[1];
+        }
+
+        const queryRect: Rect = { x: sMinX, y: sMinY, width: sMaxX - sMinX, height: sMaxY - sMinY };
+
+        // 2. 查询空间索引
+        const visibleNodes: Node[] = [];
+        scene.spatialIndex.retrieve(visibleNodes, queryRect);
+
+        // 3. 计算当前缩放级别 (用于 LOD)
+        const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
+
+        // 4. 渲染可见节点
+        for (const node of visibleNodes) {
+            // LOD 检查
+            if (currentScale < node.minVisibleScale || currentScale > node.maxVisibleScale) {
+                continue;
+            }
+
+            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                (node as any).renderWebGL(this, cullingRect);
+            }
+        }
+
+        // 如果开启了调试模式，绘制四叉树
+        if (scene.spatialIndex.debug) {
+            scene.spatialIndex.drawDebug(this.ctx, scene.transform.worldMatrix);
+        }
     }
 
     /**
