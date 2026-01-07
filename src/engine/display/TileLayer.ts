@@ -29,14 +29,26 @@ export class TileLayer extends Node {
     private loading: Map<string, AbortController> = new Map();
 
     // --- 共享渲染数据 (GC 优化) ---
-    private static sharedColor: Float32Array = new Float32Array([1, 1, 1, 1]);
-    private static sharedVertices: Float32Array = new Float32Array(8);
-    private static sharedUVs: Float32Array = new Float32Array([
-        0, 0, // TL
-        1, 0, // TR
-        1, 1, // BR
-        0, 1  // BL
-    ]);
+    private static sharedColor: Float32Array = (() => {
+        const arr = new Float32Array([1, 1, 1, 1]);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'TileLayer_sharedColor', arr.byteLength, 'TileLayer Shared Color');
+        return arr;
+    })();
+    private static sharedVertices: Float32Array = (() => {
+        const arr = new Float32Array(8);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'TileLayer_sharedVertices', arr.byteLength, 'TileLayer Shared Vertices');
+        return arr;
+    })();
+    private static sharedUVs: Float32Array = (() => {
+        const arr = new Float32Array([
+            0, 0, // TL
+            1, 0, // TR
+            1, 1, // BR
+            0, 1  // BL
+        ]);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'TileLayer_sharedUVs', arr.byteLength, 'TileLayer Shared UVs');
+        return arr;
+    })();
 
     // LRU 配置
     private static MAX_TILES = 20000; // 最大缓存瓦片数

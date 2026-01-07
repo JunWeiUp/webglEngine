@@ -2,12 +2,13 @@ import { Node } from './Node';
 import { TextureManager } from '../utils/TextureManager';
 import { Texture } from '../core/Texture';
 import type { IRenderer } from '../core/IRenderer';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 /**
  * Sprite (精灵) 类
  * 
  * 显示 2D 图像的基本节点。
- * 继承自 Node，具有变换和交互能力。
+ * 继承自 Node，具有变换 and 交互能力。
  * 优化了渲染性能，使用静态共享缓冲区来减少 GC。
  */
 export class Sprite extends Node {
@@ -18,7 +19,11 @@ export class Sprite extends Node {
     
     // --- 颜色属性优化 ---
     // 默认使用静态共享的白色，直到用户修改
-    private static readonly DEFAULT_COLOR = new Float32Array([1, 1, 1, 1]);
+    private static readonly DEFAULT_COLOR = (() => {
+        const arr = new Float32Array([1, 1, 1, 1]);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'Sprite_DEFAULT_COLOR', arr.byteLength, 'Sprite Default Color');
+        return arr;
+    })();
     private _color: Float32Array = Sprite.DEFAULT_COLOR;
 
     /** 颜色叠加/混合 (RGBA) */
@@ -31,7 +36,11 @@ export class Sprite extends Node {
 
     // --- 渲染优化共享缓冲区 (静态) ---
     // 避免每帧创建新数组
-    private static sharedVertices: Float32Array = new Float32Array(8);
+    private static sharedVertices: Float32Array = (() => {
+        const arr = new Float32Array(8);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'Sprite_sharedVertices', arr.byteLength, 'Sprite Shared Vertices');
+        return arr;
+    })();
     // sharedUVs 不再静态共享，因为每个 Sprite 可能不同 (Atlas)
     // 但全屏纹理的 UV 是固定的，Texture 类默认提供。
 

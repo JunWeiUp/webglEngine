@@ -1,8 +1,11 @@
 import { Node } from '../display/Node';
 import type { Rect } from '../core/Rect';
+import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
 export type { Rect };
 
 export class QuadTree {
+    private static _nodeCount = 0;
+    private _id: number;
     private bounds: Rect;
     private capacity: number;
     private maxDepth: number;
@@ -13,11 +16,20 @@ export class QuadTree {
     private useLocalBounds: boolean = false;
 
     constructor(bounds: Rect, capacity: number = 10, maxDepth: number = 5, depth: number = 0, useLocalBounds: boolean = false) {
+        this._id = QuadTree._nodeCount++;
         this.bounds = bounds;
         this.capacity = capacity;
         this.maxDepth = maxDepth;
         this.depth = depth;
         this.useLocalBounds = useLocalBounds;
+
+        // 追踪节点结构开销 (估算每个节点约 128 字节)
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_TYPED_ARRAY,
+            `QuadTree_Node_${this._id}`,
+            128,
+            `QuadTree Node #${this._id}`
+        );
     }
 
     /**
@@ -28,8 +40,15 @@ export class QuadTree {
         for (let i = 0; i < this.nodes.length; i++) {
             if (this.nodes[i]) {
                 this.nodes[i].clear();
+                // 递归清理不需要手动 untrack，因为 clear 不会销毁对象，
+                // 但在这个引擎中，nodes = [] 会导致子节点被 GC。
             }
         }
+        // 如果我们要真正追踪 GC，需要更复杂的逻辑。
+        // 这里我们简单处理：当节点被移除时 untrack。
+        this.nodes.forEach(n => {
+            if (n) MemoryTracker.getInstance().untrack(`QuadTree_Node_${n._id}`);
+        });
         this.nodes = [];
     }
 

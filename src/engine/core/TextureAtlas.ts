@@ -1,5 +1,6 @@
 import { Texture } from './Texture';
 import { TextureManager } from '../utils/TextureManager';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class TextureAtlas {
     public textures: { [key: string]: Texture } = {};
@@ -53,6 +54,13 @@ export class TextureAtlas {
                 u1, v1, // BR
                 u0, v1  // BL
             ]);
+            
+            MemoryTracker.getInstance().track(
+                MemoryCategory.CPU_TYPED_ARRAY,
+                `TextureAtlas_UV_${imageUrl}_${key}`,
+                uvs.byteLength,
+                `Atlas UV: ${key}`
+            );
             
             const subTexture = new Texture(baseTex.baseTexture, rect.w, rect.h, uvs);
             atlas.textures[key] = subTexture;

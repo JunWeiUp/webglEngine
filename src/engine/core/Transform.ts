@@ -1,4 +1,5 @@
 import { mat3, vec2 } from 'gl-matrix';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class Transform {
     public x: number = 0;
@@ -22,6 +23,14 @@ export class Transform {
     public get localMatrix(): mat3 {
         if (!this._localMatrix) {
             this._localMatrix = mat3.create();
+            if (this.ownerId !== -1) {
+                MemoryTracker.getInstance().track(
+                    MemoryCategory.CPU_TYPED_ARRAY,
+                    `Node_${this.ownerId}_localMatrix`,
+                    9 * 4,
+                    `Node ${this.ownerId} Local Matrix`
+                );
+            }
         }
         return this._localMatrix;
     }
@@ -29,6 +38,14 @@ export class Transform {
     public get worldMatrix(): mat3 {
         if (!this._worldMatrix) {
             this._worldMatrix = mat3.create();
+            if (this.ownerId !== -1) {
+                MemoryTracker.getInstance().track(
+                    MemoryCategory.CPU_TYPED_ARRAY,
+                    `Node_${this.ownerId}_worldMatrix`,
+                    9 * 4,
+                    `Node ${this.ownerId} World Matrix`
+                );
+            }
         }
         return this._worldMatrix;
     }
@@ -39,8 +56,10 @@ export class Transform {
     public parentVersion: number = -1;
     public version: number = 0;
 
-    constructor() {
-        // Init
+    private ownerId: number;
+
+    constructor(ownerId: number = -1) {
+        this.ownerId = ownerId;
     }
 
     // Setters that trigger dirty flag

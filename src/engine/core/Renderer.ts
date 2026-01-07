@@ -150,6 +150,12 @@ export class Renderer {
         for (let i = 0; i < this.maxTextures; i++) {
             this.textureIndices[i] = i;
         }
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_TYPED_ARRAY,
+            'Renderer_textureIndices',
+            (this.textureIndices as Int32Array).byteLength,
+            'Renderer Texture Indices'
+        );
 
         // 2. 动态生成 Fragment Shader (GLSL 3.00 ES)
         const fsSource = this.generateFragmentShader(this.maxTextures);

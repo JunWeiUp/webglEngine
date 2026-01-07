@@ -14,7 +14,7 @@ export class Node {
     public readonly id = Node._nextId++;
 
     /** 变换组件 (位置、旋转、缩放) */
-    public transform: Transform = new Transform();
+    public transform: Transform = new Transform(this.id);
     
     /** 子节点列表 (延迟初始化) */
     private _children: Node[] | null = null;
