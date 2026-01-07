@@ -322,6 +322,9 @@ void main() {
             this.renderSceneWithSpatialIndex(scene, dirtyRect);
         } else {
             const r0 = performance.now();
+            // 优化点：如果节点过多，renderNodeWebGL 会非常卡。
+            // 这里的递归是性能杀手。我们已经引入了子树裁剪，
+            // 但对于 10万+ 节点，递归本身的开销依然存在。
             this.renderNodeWebGL(scene, dirtyRect);
             this.stats.times.renderWebGL = performance.now() - r0;
             this.stats.times.spatialQuery = 0;
@@ -420,26 +423,41 @@ void main() {
     }
 
     /**
-     * 递归渲染节点及其子节点 (WebGL Pass)
+     * 渲染节点及其子节点 (WebGL Pass)
+     * 优化：使用显式栈代替递归，减少函数调用开销，并增加极速裁剪
      */
-    private renderNodeWebGL(node: Node, cullingRect?: Rect) {
-        // 视锥体剔除 (Frustum Culling)
-        let isVisible = true;
+    private renderNodeWebGL(root: Node, cullingRect?: Rect) {
+        const stack: Node[] = [root];
         
-        // 仅对有尺寸的节点进行剔除检查
-        if (node.width > 0 && node.height > 0) {
-            isVisible = this.isNodeVisible(node, cullingRect);
-        }
+        const viewX = cullingRect ? cullingRect.x : 0;
+        const viewY = cullingRect ? cullingRect.y : 0;
+        const viewW = cullingRect ? cullingRect.width : this.width;
+        const viewH = cullingRect ? cullingRect.height : this.height;
+        const viewRight = viewX + viewW;
+        const viewBottom = viewY + viewH;
 
-        if (isVisible) {
+        while (stack.length > 0) {
+            const node = stack.pop()!;
+            
+            // 1. 快速剔除
+            const aabb = node.worldAABB;
+            if (aabb) {
+                if (aabb.x + aabb.width < viewX || aabb.x > viewRight || 
+                    aabb.y + aabb.height < viewY || aabb.y > viewBottom) {
+                    continue; // 子树裁剪
+                }
+            }
+
+            // 2. 渲染当前节点
             if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
                 (node as any).renderWebGL(this, cullingRect);
             }
-        }
 
-        // 递归遍历子节点
-        for (const child of node.children) {
-            this.renderNodeWebGL(child, cullingRect);
+            // 3. 将子节点入栈 (反序入栈以保持渲染顺序，或者正序也可以，因为 WebGL 通常不依赖子节点顺序，除非有透明混合)
+            const children = node.children;
+            for (let i = children.length - 1; i >= 0; i--) {
+                stack.push(children[i]);
+            }
         }
     }
 
@@ -470,50 +488,20 @@ void main() {
      * 检查节点是否在视口范围内（基于 AABB）
      */
     private isNodeVisible(node: Node, cullingRect?: Rect): boolean {
-        let minX, minY, maxX, maxY;
+        // 极致优化：直接访问 AABB 属性，减少属性查找
+        const aabb = node.worldAABB;
+        if (!aabb) return true; // 无尺寸节点默认可见 (用于容器向下递归)
 
-        // 1. 优先使用缓存的 World AABB (在 updateTransform 中已计算)
-        if (node.worldAABB) {
-            minX = node.worldAABB.x;
-            minY = node.worldAABB.y;
-            maxX = minX + node.worldAABB.width;
-            maxY = minY + node.worldAABB.height;
-        } else {
-            // 2. 回退到实时计算 (通常不应发生，除非节点无尺寸或未 updateTransform)
-            const m = node.transform.worldMatrix;
-            const w = node.width;
-            const h = node.height;
-
-            minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
-            
-            const corners = [0, 0, w, 0, 0, h, w, h];
-            
-            for (let i = 0; i < 4; i++) {
-                const x = corners[i*2];
-                const y = corners[i*2+1];
-                
-                const wx = x * m[0] + y * m[3] + m[6];
-                const wy = x * m[1] + y * m[4] + m[7];
-                
-                if (wx < minX) minX = wx;
-                if (wx > maxX) maxX = wx;
-                if (wy < minY) minY = wy;
-                if (wy > maxY) maxY = wy;
-            }
-        }
-        
-        // AABB 相交检测: 检查是否与视口 (或 DirtyRect) 重叠
-        // 如果 cullingRect 为空，则使用整个视口 (this.width, this.height)
         const viewX = cullingRect ? cullingRect.x : 0;
         const viewY = cullingRect ? cullingRect.y : 0;
         const viewW = cullingRect ? cullingRect.width : this.width;
         const viewH = cullingRect ? cullingRect.height : this.height;
 
-        if (maxX < viewX || minX > viewX + viewW || maxY < viewY || minY > viewY + viewH) {
-            return false;
-        }
-        
-        return true;
+        // 高效的 AABB 相交检测
+        return !(aabb.x + aabb.width < viewX || 
+                 aabb.x > viewX + viewW || 
+                 aabb.y + aabb.height < viewY || 
+                 aabb.y > viewY + viewH);
     }
 
     // 废弃的辅助方法 (为了兼容旧接口暂时保留)

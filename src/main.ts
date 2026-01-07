@@ -81,19 +81,19 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalRows = 2000; // 恢复为 100 行 (共 10000 个容器)
 const totalCols = 100;
 const batchSize = 5; // 每帧处理 5 行
 
 let currentRow = 0;
 
 // 添加加载提示
-const loadingText = new Text("Loading Scene... 0%");
-loadingText.transform.position = [engine.renderer.width / 2 - 100, engine.renderer.height / 2];
-loadingText.fontSize = 40;
-loadingText.fillStyle = "blue";
-loadingText.name = "LoadingText";
-engine.scene.addChild(loadingText, true);
+// const loadingText = new Text("Loading Scene... 0%");
+// loadingText.transform.position = [engine.renderer.width / 2 - 100, engine.renderer.height / 2];
+// loadingText.fontSize = 40;
+// loadingText.fillStyle = "blue";
+// loadingText.name = "LoadingText";
+// engine.scene.addChild(loadingText, true);
 
 function loadBatch() {
     const startRow = currentRow;
@@ -144,16 +144,16 @@ function loadBatch() {
 
     // 更新进度
     const progress = Math.floor((currentRow / totalRows) * 100);
-    loadingText.text = `Loading Scene... ${progress}%`;
+    // loadingText.text = `Loading Scene... ${progress}%`;
     // 手动触发布局更新和重绘
-    loadingText.width = 0; // 强制重新测量
-    engine.scene.invalidate();
+    // loadingText.width = 0; // 强制重新测量
+    // engine.scene.invalidate();
 
     if (currentRow < totalRows) {
             requestAnimationFrame(loadBatch);
         } else {
             console.log("Scene loading complete");
-            engine.scene.removeChild(loadingText);
+            // engine.scene.removeChild(loadingText);
             
             const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
             instruction.transform.position = [20, 20];
