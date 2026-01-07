@@ -1,12 +1,37 @@
 import { mat3, vec2 } from 'gl-matrix';
 
 export class Transform {
-    public position: vec2 = vec2.fromValues(0, 0);
-    public scale: vec2 = vec2.fromValues(1, 1);
+    public x: number = 0;
+    public y: number = 0;
+    public scaleX: number = 1;
+    public scaleY: number = 1;
     public rotation: number = 0;
 
-    public localMatrix: mat3 = mat3.create();
-    public worldMatrix: mat3 = mat3.create();
+    /** 
+     * 本地矩阵。
+     * 使用 Float32Array 存储 9 个元素。
+     * 初始为 null，按需创建以节省内存。
+     */
+    private _localMatrix: mat3 | null = null;
+    /** 
+     * 世界矩阵。
+     * 初始为 null，按需创建。
+     */
+    private _worldMatrix: mat3 | null = null;
+
+    public get localMatrix(): mat3 {
+        if (!this._localMatrix) {
+            this._localMatrix = mat3.create();
+        }
+        return this._localMatrix;
+    }
+
+    public get worldMatrix(): mat3 {
+        if (!this._worldMatrix) {
+            this._worldMatrix = mat3.create();
+        }
+        return this._worldMatrix;
+    }
 
     public dirty: boolean = true;
     
@@ -20,17 +45,17 @@ export class Transform {
 
     // Setters that trigger dirty flag
     setPosition(x: number, y: number) {
-        if (this.position[0] !== x || this.position[1] !== y) {
-            this.position[0] = x;
-            this.position[1] = y;
+        if (this.x !== x || this.y !== y) {
+            this.x = x;
+            this.y = y;
             this.dirty = true;
         }
     }
 
     setScale(x: number, y: number) {
-        if (this.scale[0] !== x || this.scale[1] !== y) {
-            this.scale[0] = x;
-            this.scale[1] = y;
+        if (this.scaleX !== x || this.scaleY !== y) {
+            this.scaleX = x;
+            this.scaleY = y;
             this.dirty = true;
         }
     }
@@ -44,19 +69,25 @@ export class Transform {
 
     updateLocalTransform() {
         if (this.dirty) {
-            mat3.identity(this.localMatrix);
-            mat3.translate(this.localMatrix, this.localMatrix, this.position);
-            mat3.rotate(this.localMatrix, this.localMatrix, this.rotation);
-            mat3.scale(this.localMatrix, this.localMatrix, this.scale);
+            const m = this.localMatrix;
+            mat3.identity(m);
+            // 手动内联矩阵变换以获得最高性能并减少临时向量创建
+            const c = Math.cos(this.rotation);
+            const s = Math.sin(this.rotation);
+            
+            m[0] = c * this.scaleX;
+            m[1] = s * this.scaleX;
+            m[3] = -s * this.scaleY;
+            m[4] = c * this.scaleY;
+            m[6] = this.x;
+            m[7] = this.y;
+
             this.version++;
             this.dirty = false;
         }
     }
 
     updateWorldTransform(parentWorldMatrix: mat3 | null) {
-        // 如果是根节点，或者父节点矩阵已更新，或者自身已更新，则重新计算世界矩阵
-        // 这里简化处理：始终计算。更严格的优化需要传递父节点的版本号。
-        // 为了配合 Node 层的递归优化，这里只负责数学计算。
         if (parentWorldMatrix) {
             mat3.multiply(this.worldMatrix, parentWorldMatrix, this.localMatrix);
         } else {

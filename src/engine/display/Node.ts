@@ -12,8 +12,17 @@ import type { Rect } from '../core/Rect';
 export class Node {
     /** 变换组件 (位置、旋转、缩放) */
     public transform: Transform = new Transform();
-    /** 子节点列表 */
-    public children: Node[] = [];
+    
+    /** 子节点列表 (延迟初始化) */
+    private _children: Node[] | null = null;
+    
+    public get children(): Node[] {
+        if (!this._children) {
+            this._children = [];
+        }
+        return this._children;
+    }
+
     /** 父节点引用 */
     public parent: Node | null = null;
 
@@ -23,24 +32,34 @@ export class Node {
     public height: number = 0;
 
     /** 
-     * 世界坐标系下的 AABB 包围盒 (缓存用于快速剔除)
-     * 在 updateTransform 中更新
+     * 世界坐标系下的 AABB 包围盒 (扁平化存储以节省内存)
      */
-    public worldAABB: Rect | null = null;
+    public worldMinX: number = Infinity;
+    public worldMinY: number = Infinity;
+    public worldMaxX: number = -Infinity;
+    public worldMaxY: number = -Infinity;
 
-    /** 是否可交互 (接收鼠标事件) */
-    public interactive: boolean = false;
-    /** 是否被鼠标悬停 */
-    public isHovered: boolean = false;
-    /** 是否被选中 */
-    public isSelected: boolean = false;
+    /** 状态位掩码 */
+    private _flags: number = 8; // 默认 BIT_SUBTREE_DIRTY 为 1
+    private static readonly BIT_INTERACTIVE = 1;
+    private static readonly BIT_HOVERED = 2;
+    private static readonly BIT_SELECTED = 4;
+    private static readonly BIT_SUBTREE_DIRTY = 8;
 
+    public get interactive(): boolean { return (this._flags & Node.BIT_INTERACTIVE) !== 0; }
+    public set interactive(v: boolean) { if (v) this._flags |= Node.BIT_INTERACTIVE; else this._flags &= ~Node.BIT_INTERACTIVE; }
+    
+    public get isHovered(): boolean { return (this._flags & Node.BIT_HOVERED) !== 0; }
+    public set isHovered(v: boolean) { if (v) this._flags |= Node.BIT_HOVERED; else this._flags &= ~Node.BIT_HOVERED; }
+    
+    public get isSelected(): boolean { return (this._flags & Node.BIT_SELECTED) !== 0; }
+    public set isSelected(v: boolean) { if (v) this._flags |= Node.BIT_SELECTED; else this._flags &= ~Node.BIT_SELECTED; }
 
-    /** 节点名称 (调试用) */
-    public name: string = "Node";
+    private get _subtreeDirty(): boolean { return (this._flags & Node.BIT_SUBTREE_DIRTY) !== 0; }
+    private set _subtreeDirty(v: boolean) { if (v) this._flags |= Node.BIT_SUBTREE_DIRTY; else this._flags &= ~Node.BIT_SUBTREE_DIRTY; }
 
-    /** 是否需要更新子树变换 */
-    private _subtreeDirty: boolean = true;
+    /** 节点名称 (调试用，可选以节省内存) */
+    public name?: string;
 
     /** 关联的四叉树节点 (用于高效更新/删除) */
     public quadTreeNode: any = null;
@@ -71,8 +90,10 @@ export class Node {
      */
     public traverse(callback: (node: Node) => void) {
         callback(this);
-        for (const child of this.children) {
-            child.traverse(callback);
+        if (this._children) {
+            for (const child of this._children) {
+                child.traverse(callback);
+            }
         }
     }
 
@@ -119,35 +140,35 @@ export class Node {
         }
     }
 
-    get x(): number { return this.transform.position[0]; }
+    get x(): number { return this.transform.x; }
     set x(value: number) {
-        if (this.transform.position[0] !== value) {
+        if (this.transform.x !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
             if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
-    get y(): number { return this.transform.position[1]; }
+    get y(): number { return this.transform.y; }
     set y(value: number) {
-        if (this.transform.position[1] !== value) {
+        if (this.transform.y !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
             if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
-    get scaleX(): number { return this.transform.scale[0]; }
+    get scaleX(): number { return this.transform.scaleX; }
     set scaleX(value: number) {
-        if (this.transform.scale[0] !== value) {
+        if (this.transform.scaleX !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setScale(value, this.scaleY));
         }
     }
 
-    get scaleY(): number { return this.transform.scale[1]; }
+    get scaleY(): number { return this.transform.scaleY; }
     set scaleY(value: number) {
-        if (this.transform.scale[1] !== value) {
+        if (this.transform.scaleY !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setScale(this.scaleX, value));
         }
@@ -201,21 +222,26 @@ export class Node {
      */
     public getBounds(includeChildren: boolean = true): Rect | null {
         // 如果当前节点没有尺寸且没有子节点，返回 null
-        if (this.width <= 0 && this.height <= 0 && this.children.length === 0) {
+        if (this.width <= 0 && this.height <= 0 && (!this._children || this._children.length === 0)) {
             return null;
         }
 
         let rect: Rect | null = null;
 
         // 1. 自身的包围盒
-        if (this.worldAABB) {
-            rect = { ...this.worldAABB };
+        if (this.worldMinX !== Infinity) {
+            rect = { 
+                x: this.worldMinX, 
+                y: this.worldMinY, 
+                width: this.worldMaxX - this.worldMinX, 
+                height: this.worldMaxY - this.worldMinY 
+            };
         }
 
-        if (!includeChildren) return rect;
+        if (!includeChildren || !this._children) return rect;
 
         // 2. 合并子节点的包围盒
-        for (const child of this.children) {
+        for (const child of this._children) {
             const childBounds = child.getBounds(true);
             if (childBounds) {
                 if (rect) {
@@ -268,7 +294,8 @@ export class Node {
      * @param child 要移除的子节点
      */
     removeChild(child: Node) {
-        const index = this.children.indexOf(child);
+        if (!this._children) return;
+        const index = this._children.indexOf(child);
         if (index !== -1) {
             // 结构变化，标记子树脏
             this.markTransformDirty();
@@ -284,7 +311,7 @@ export class Node {
                 }
             }
 
-            this.children.splice(index, 1);
+            this._children.splice(index, 1);
             child.parent = null;
             this.invalidate(); // 结构变化需要重绘
         }
@@ -323,15 +350,18 @@ export class Node {
             if (this.width > 0 && this.height > 0) {
                 this.updateWorldAABB();
             } else {
-                this.worldAABB = null;
+                this.worldMinX = Infinity;
+                this.worldMinY = Infinity;
+                this.worldMaxX = -Infinity;
+                this.worldMaxY = -Infinity;
             }
         }
 
         // 3. 递归更新所有子节点
         // 如果 worldDirty 为 true，子节点必须更新
         // 如果 worldDirty 为 false，仅当 _subtreeDirty 为 true 时才进入子节点
-        if (worldDirty || this._subtreeDirty) {
-            for (const child of this.children) {
+        if (this._children && (worldDirty || this._subtreeDirty)) {
+            for (const child of this._children) {
                 child.updateTransform(this.transform.worldMatrix, worldDirty);
             }
         }
@@ -379,13 +409,10 @@ export class Node {
         if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
         if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
 
-        if (!this.worldAABB) {
-            this.worldAABB = { x: 0, y: 0, width: 0, height: 0 };
-        }
-        this.worldAABB.x = minX;
-        this.worldAABB.y = minY;
-        this.worldAABB.width = maxX - minX;
-        this.worldAABB.height = maxY - minY;
+        this.worldMinX = minX;
+        this.worldMinY = minY;
+        this.worldMaxX = maxX;
+        this.worldMaxY = maxY;
     }
 
     /**

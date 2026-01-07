@@ -415,8 +415,8 @@ export class OutlineView {
             // 5. 应用平移到根节点 (Scene)
             // 注意：Scene 是根节点，直接修改 position 即可平移整个世界
             // 累加位移
-            this.rootNode.transform.position[0] += dx;
-            this.rootNode.transform.position[1] += dy;
+            this.rootNode.x += dx;
+            this.rootNode.y += dy;
             this.rootNode.transform.dirty = true;
             this.rootNode.invalidate();
         }

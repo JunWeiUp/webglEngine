@@ -81,8 +81,8 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 2000; // 恢复为 100 行 (共 10000 个容器)
-const totalCols = 100;
+const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalCols = 1000;
 const batchSize = 5; // 每帧处理 5 行
 
 let currentRow = 0;
@@ -103,7 +103,7 @@ function loadBatch() {
         for (let j = 0; j < totalCols; j++) {
             const container = new Container(engine.renderer.gl);
             container.name = "MyContainer";
-            container.transform.position = [300 * i, 300 * j];
+            container.transform.setPosition(300 * i, 300 * j);
             container.interactive = true;
             container.width = 400;
             container.height = 400;
@@ -114,7 +114,7 @@ function loadBatch() {
 
             // 3. Add Sprites with generated images
             const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
-            sprite1.transform.position = [50, 50];
+            sprite1.transform.setPosition(50, 50);
             sprite1.width = 100;
             sprite1.height = 100;
             sprite1.interactive = true;
@@ -122,7 +122,7 @@ function loadBatch() {
             container.addChild(sprite1, true);
 
             const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
-            sprite2.transform.position = [200, 50];
+            sprite2.transform.setPosition(200, 50);
             sprite2.width = 100;
             sprite2.height = 100;
             sprite2.interactive = true;
@@ -131,7 +131,7 @@ function loadBatch() {
 
             // 4. Add Text (Canvas2D)
             const text = new Text("Hello WebGL + Canvas!");
-            text.transform.position = [50, 200];
+            text.transform.setPosition(50, 200);
             text.fontSize = 30;
             text.fillStyle = "red";
             text.interactive = true;
@@ -156,7 +156,7 @@ function loadBatch() {
             // engine.scene.removeChild(loadingText);
             
             const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
-            instruction.transform.position = [20, 20];
+            instruction.transform.setPosition(20, 20);
             instruction.fontSize = 16;
             instruction.fillStyle = "black";
             instruction.name = "Instructions";

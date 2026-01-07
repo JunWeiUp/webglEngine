@@ -73,17 +73,11 @@ export class InteractionManager {
      */
     private hitTest(node: Node, point: vec2): Node | null {
         // 优化：利用缓存的 World AABB 进行快速剔除 (Fast Rejection)
-        if (node.width > 0 && node.height > 0) {
-            // 如果节点有 AABB 缓存，先检查点是否在 AABB 内
-            if (node.worldAABB) {
-                const aabb = node.worldAABB;
-                // 注意：AABB 只能用于剔除！
-                // 因为旋转后的矩形的 AABB 比实际矩形大。
-                // 如果点不在 AABB 内，则一定不在矩形内 (Safe Rejection)。
-                if (point[0] < aabb.x || point[0] > aabb.x + aabb.width ||
-                    point[1] < aabb.y || point[1] > aabb.y + aabb.height) {
-                    return null;
-                }
+        if (node.worldMinX !== Infinity) {
+            // 如果点不在 AABB 内，则一定不在矩形内 (Safe Rejection)。
+            if (point[0] < node.worldMinX || point[0] > node.worldMaxX ||
+                point[1] < node.worldMinY || point[1] > node.worldMaxY) {
+                return null;
             }
         }
         
@@ -423,11 +417,11 @@ export class InteractionManager {
             // 优先使用 World AABB (如果存在)
             let nodeMinX, nodeMinY, nodeMaxX, nodeMaxY;
 
-            if (node.worldAABB) {
-                nodeMinX = node.worldAABB.x;
-                nodeMinY = node.worldAABB.y;
-                nodeMaxX = nodeMinX + node.worldAABB.width;
-                nodeMaxY = nodeMinY + node.worldAABB.height;
+            if (node.worldMinX !== Infinity) {
+                nodeMinX = node.worldMinX;
+                nodeMinY = node.worldMinY;
+                nodeMaxX = node.worldMaxX;
+                nodeMaxY = node.worldMaxY;
             } else {
                 // 计算节点在屏幕空间的 AABB
                 const corners = [
@@ -565,15 +559,15 @@ export class InteractionManager {
 
             const pos = this.getMousePos(e);
 
-            const oldScale = this.scene.transform.scale[0];
+            const oldScale = this.scene.transform.scaleX;
             const newScale = oldScale * scaleChange;
 
             if (newScale < 0.1 || newScale > 10) return;
 
             const mouseX = pos[0];
             const mouseY = pos[1];
-            const transX = this.scene.transform.position[0];
-            const transY = this.scene.transform.position[1];
+            const transX = this.scene.transform.x;
+            const transY = this.scene.transform.y;
 
             const newTransX = mouseX - (mouseX - transX) * scaleChange;
             const newTransY = mouseY - (mouseY - transY) * scaleChange;

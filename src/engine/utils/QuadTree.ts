@@ -65,11 +65,11 @@ export class QuadTree {
             maxY = node.y + node.height;
         } else {
             // Use cached World AABB if available
-            if (node.worldAABB) {
-                minX = node.worldAABB.x;
-                minY = node.worldAABB.y;
-                maxX = minX + node.worldAABB.width;
-                maxY = minY + node.worldAABB.height;
+            if (node.worldMinX !== Infinity) {
+                minX = node.worldMinX;
+                minY = node.worldMinY;
+                maxX = node.worldMaxX;
+                maxY = node.worldMaxY;
             } else {
                 // Fallback: Calculate World AABB
                 const m = node.transform.worldMatrix;

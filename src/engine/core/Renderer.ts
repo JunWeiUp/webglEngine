@@ -439,11 +439,10 @@ void main() {
         while (stack.length > 0) {
             const node = stack.pop()!;
             
-            // 1. 快速剔除
-            const aabb = node.worldAABB;
-            if (aabb) {
-                if (aabb.x + aabb.width < viewX || aabb.x > viewRight || 
-                    aabb.y + aabb.height < viewY || aabb.y > viewBottom) {
+            // 1. 快速剔除 (极速 AABB 判断)
+            if (node.worldMinX !== Infinity) {
+                if (node.worldMaxX < viewX || node.worldMinX > viewRight || 
+                    node.worldMaxY < viewY || node.worldMinY > viewBottom) {
                     continue; // 子树裁剪
                 }
             }
@@ -453,7 +452,7 @@ void main() {
                 (node as any).renderWebGL(this, cullingRect);
             }
 
-            // 3. 将子节点入栈 (反序入栈以保持渲染顺序，或者正序也可以，因为 WebGL 通常不依赖子节点顺序，除非有透明混合)
+            // 3. 将子节点入栈
             const children = node.children;
             for (let i = children.length - 1; i >= 0; i--) {
                 stack.push(children[i]);
@@ -489,8 +488,7 @@ void main() {
      */
     private isNodeVisible(node: Node, cullingRect?: Rect): boolean {
         // 极致优化：直接访问 AABB 属性，减少属性查找
-        const aabb = node.worldAABB;
-        if (!aabb) return true; // 无尺寸节点默认可见 (用于容器向下递归)
+        if (node.worldMinX === Infinity) return true; // 无尺寸节点默认可见 (用于容器向下递归)
 
         const viewX = cullingRect ? cullingRect.x : 0;
         const viewY = cullingRect ? cullingRect.y : 0;
@@ -498,10 +496,10 @@ void main() {
         const viewH = cullingRect ? cullingRect.height : this.height;
 
         // 高效的 AABB 相交检测
-        return !(aabb.x + aabb.width < viewX || 
-                 aabb.x > viewX + viewW || 
-                 aabb.y + aabb.height < viewY || 
-                 aabb.y > viewY + viewH);
+        return !(node.worldMaxX < viewX || 
+                 node.worldMinX > viewX + viewW || 
+                 node.worldMaxY < viewY || 
+                 node.worldMinY > viewY + viewH);
     }
 
     // 废弃的辅助方法 (为了兼容旧接口暂时保留)
