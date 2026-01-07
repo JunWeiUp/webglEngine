@@ -27,7 +27,15 @@ export class Renderer {
     // 性能统计
     public stats = {
         drawCalls: 0,
-        quadCount: 0
+        quadCount: 0,
+        times: {
+            transform: 0,
+            spatialQuery: 0,
+            renderWebGL: 0,
+            flush: 0,
+            canvas2D: 0,
+            total: 0
+        }
     };
 
     // 静态常量，避免每次 flush 创建新数组 (将在 initWebGL 中动态生成)
@@ -266,6 +274,7 @@ void main() {
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
     public render(scene: Node, dirtyRect?: Rect) {
+        const startTime = performance.now();
         // 重置统计
         this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
@@ -304,23 +313,33 @@ void main() {
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
         // 更新场景的世界变换矩阵
+        const t0 = performance.now();
         scene.updateTransform(null, true); // 根节点强制更新
+        this.stats.times.transform = performance.now() - t0;
 
         // 3. 决定渲染策略：如果有空间索引则使用索引查询，否则使用递归遍历
         if (scene.spatialIndex) {
             this.renderSceneWithSpatialIndex(scene, dirtyRect);
         } else {
+            const r0 = performance.now();
             this.renderNodeWebGL(scene, dirtyRect);
+            this.stats.times.renderWebGL = performance.now() - r0;
+            this.stats.times.spatialQuery = 0;
         }
         
         // 渲染结束，强制刷新剩余的批次
+        const f0 = performance.now();
         this.flush();
+        this.stats.times.flush = performance.now() - f0;
+
+        this.stats.times.total = performance.now() - startTime;
     }
 
     /**
      * 使用空间索引优化渲染流程
      */
     private renderSceneWithSpatialIndex(scene: Node, cullingRect?: Rect) {
+        const q0 = performance.now();
         // 1. 确定查询范围 (场景空间)
         const viewX = cullingRect ? cullingRect.x : 0;
         const viewY = cullingRect ? cullingRect.y : 0;
@@ -355,7 +374,9 @@ void main() {
         // 2. 查询空间索引
         const visibleNodes: Node[] = [];
         scene.spatialIndex.retrieve(visibleNodes, queryRect);
+        this.stats.times.spatialQuery = performance.now() - q0;
 
+        const r0 = performance.now();
         // 3. 计算当前缩放级别 (用于 LOD)
         const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
 
@@ -375,6 +396,7 @@ void main() {
         if (scene.spatialIndex.debug) {
             scene.spatialIndex.drawDebug(this.ctx, scene.transform.worldMatrix);
         }
+        this.stats.times.renderWebGL = performance.now() - r0;
     }
 
     /**
@@ -383,8 +405,10 @@ void main() {
      * @param dirtyRect 脏矩形区域 (可选)
      */
     public renderCanvas(scene: Node, dirtyRect?: Rect) {
+        const c0 = performance.now();
         // 递归渲染节点树 (Canvas Pass)
         this.renderNodeCanvas(scene, dirtyRect);
+        this.stats.times.canvas2D = performance.now() - c0;
     }
 
 

@@ -272,11 +272,19 @@ function updateStats() {
     scene.traverse(() => totalNodes++);
 
     statsContainer.innerHTML = `
+        <div style="font-weight: bold; color: #fff; margin-bottom: 5px;">Performance Monitor</div>
         FPS: ${fps}<br>
+        Total Nodes: ${totalNodes}<br>
         Draw Calls: ${glStats.drawCalls}<br>
         Quads: ${glStats.quadCount}<br>
-        Total Nodes: ${totalNodes}<br>
-        WebGL Version: 2.0 (GLSL 300 ES)
+        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
+        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
+        Transform: ${glStats.times.transform.toFixed(2)}<br>
+        Spatial Query: ${glStats.times.spatialQuery.toFixed(2)}<br>
+        WebGL Render: ${glStats.times.renderWebGL.toFixed(2)}<br>
+        Flush (GPU): ${glStats.times.flush.toFixed(2)}<br>
+        Canvas 2D: ${glStats.times.canvas2D.toFixed(2)}<br>
+        <div style="color: #ffff00; margin-top: 2px;">Total: ${glStats.times.total.toFixed(2)}</div>
     `;
     requestAnimationFrame(updateStats);
 }
