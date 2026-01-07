@@ -2,6 +2,7 @@ import { defaultFragmentShader, defaultVertexShader } from './shaders';
 import { Node } from '../display/Node';
 import { mat3 } from 'gl-matrix';
 import type { Rect } from './Rect';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 /**
  * 核心渲染器类
@@ -53,6 +54,12 @@ export class Renderer {
     constructor(container: HTMLElement) {
         // 初始化批处理数据
         this.vertexBufferData = new Float32Array(Renderer.MAX_QUADS * 4 * Renderer.VERTEX_SIZE);
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_TYPED_ARRAY, 
+            'Renderer_vertexBufferData', 
+            this.vertexBufferData.byteLength,
+            'Renderer Vertex Buffer (CPU)'
+        );
 
         // 创建 WebGL Canvas
         const canvasGL = document.createElement('canvas');
@@ -111,6 +118,20 @@ export class Renderer {
             0, -2 / h, 0,
             -1, 1, 1
         );
+
+        // 追踪 Canvas 内存
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_CANVAS, 
+            'Renderer_WebGL_Canvas', 
+            w * h * 4,
+            'Renderer WebGL Canvas'
+        );
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_CANVAS, 
+            'Renderer_2D_Canvas', 
+            w * h * 4,
+            'Renderer 2D Canvas'
+        );
     }
 
     /**
@@ -168,6 +189,12 @@ void main() {
         this.dynamicVertexBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.dynamicVertexBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, this.vertexBufferData.byteLength, gl.DYNAMIC_DRAW);
+        MemoryTracker.getInstance().track(
+            MemoryCategory.GPU_BUFFER,
+            'Renderer_dynamicVertexBuffer',
+            this.vertexBufferData.byteLength,
+            'Renderer Dynamic Vertex Buffer (GPU)'
+        );
 
         // 创建静态索引缓冲区
         const indices = new Uint16Array(Renderer.MAX_QUADS * 6);
@@ -183,6 +210,12 @@ void main() {
         this.indexBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+        MemoryTracker.getInstance().track(
+            MemoryCategory.GPU_BUFFER,
+            'Renderer_indexBuffer',
+            indices.byteLength,
+            'Renderer Index Buffer (GPU)'
+        );
         
         // 设置顶点属性布局
         this.bindAttributes();

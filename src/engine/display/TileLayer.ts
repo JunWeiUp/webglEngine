@@ -3,6 +3,7 @@ import type { IRenderer } from '../core/IRenderer';
 import type { Rect } from '../core/Rect';
 import { TextureManager } from '../utils/TextureManager';
 import { mat3, vec2 } from 'gl-matrix';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export type TileSource = string | HTMLCanvasElement | Promise<HTMLCanvasElement>;
 
@@ -133,6 +134,17 @@ export class TileLayer extends Node {
                                     lastUsedTime: performance.now(),
                                     url: url 
                                 });
+
+                                // 追踪动态生成的纹理内存 (URL 加载的已在 TextureManager 中追踪)
+                                if (!url) {
+                                    MemoryTracker.getInstance().track(
+                                        MemoryCategory.GPU_TEXTURE,
+                                        `Tile_${key}`,
+                                        this.tileSize * this.tileSize * 4,
+                                        `Tile Texture: ${key}`
+                                    );
+                                }
+
                                 this.loading.delete(key);
                                 this.invalidate(); // 瓦片加载完成，请求重绘
                             } else {
@@ -140,6 +152,7 @@ export class TileLayer extends Node {
                                 if (!url) {
                                     // 如果是动态生成的纹理，需要手动释放
                                     gl.deleteTexture(tex);
+                                    MemoryTracker.getInstance().untrack(`Tile_${key}`);
                                 }
                                 // 如果是 URL 纹理，TextureManager 会处理（或者已经在 LRU 中被处理）
                             }
@@ -268,6 +281,7 @@ export class TileLayer extends Node {
             } else {
                 // 如果是动态生成的，直接删除纹理
                 gl.deleteTexture(info.texture);
+                MemoryTracker.getInstance().untrack(`Tile_${key}`);
             }
             
             this.tileTextures.delete(key);

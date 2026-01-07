@@ -1,4 +1,5 @@
 import { TextureManager } from './TextureManager';
+import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
 
 /**
  * 简单的纹理图集管理器 (单例模式)
@@ -47,6 +48,14 @@ export class AtlasManager {
             isFull: false
         };
 
+        const pageId = this.pages.length;
+        MemoryTracker.getInstance().track(
+            MemoryCategory.CPU_CANVAS,
+            `Atlas_Page_Canvas_${pageId}`,
+            this.ATLAS_SIZE * this.ATLAS_SIZE * 4,
+            `Atlas Page Canvas #${pageId}`
+        );
+
         if (this.gl) {
             this.initPageTexture(this.gl, page);
         }
@@ -64,6 +73,17 @@ export class AtlasManager {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        // 追踪图集纹理内存
+        const pageId = this.pages.indexOf(page);
+        if (pageId !== -1) {
+            MemoryTracker.getInstance().track(
+                MemoryCategory.GPU_TEXTURE,
+                `Atlas_Page_Texture_${pageId}`,
+                this.ATLAS_SIZE * this.ATLAS_SIZE * 4,
+                `Atlas Page Texture #${pageId}`
+            );
+        }
     }
 
     public static getInstance(): AtlasManager {
@@ -198,6 +218,16 @@ export class AtlasManager {
 
     public reset() {
         console.log("Resetting All Atlas Pages");
+        
+        // 清除旧的内存记录
+        for (let i = 0; i < this.pages.length; i++) {
+            MemoryTracker.getInstance().untrack(`Atlas_Page_Canvas_${i}`);
+            MemoryTracker.getInstance().untrack(`Atlas_Page_Texture_${i}`);
+            if (this.gl && this.pages[i].texture) {
+                this.gl.deleteTexture(this.pages[i].texture);
+            }
+        }
+
         this.pages = [];
         this.createPage();
         

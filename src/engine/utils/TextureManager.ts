@@ -1,4 +1,5 @@
 import { Texture } from '../core/Texture';
+import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
 
 export class TextureManager {
     private static cache: Map<string, Texture> = new Map();
@@ -37,6 +38,15 @@ export class TextureManager {
                 if (webglTex) {
                     const texture = new Texture(webglTex, image.width, image.height);
                     this.cache.set(url, texture);
+
+                    // 追踪纹理内存
+                    MemoryTracker.getInstance().track(
+                        MemoryCategory.GPU_TEXTURE,
+                        `Texture_${url}`,
+                        image.width * image.height * 4,
+                        `Texture: ${url}`
+                    );
+
                     resolve(texture);
                 } else {
                     reject(new Error("Failed to create texture"));
@@ -73,6 +83,15 @@ export class TextureManager {
             if (webglTex) {
                 const texture = new Texture(webglTex, bitmap.width, bitmap.height);
                 this.cache.set(url, texture);
+                
+                // 追踪纹理内存
+                MemoryTracker.getInstance().track(
+                    MemoryCategory.GPU_TEXTURE,
+                    `Texture_${url}`,
+                    bitmap.width * bitmap.height * 4,
+                    `Texture: ${url}`
+                );
+
                 bitmap.close(); // Clean up bitmap memory
                 return texture;
             } else {
@@ -127,6 +146,14 @@ export class TextureManager {
         
         const texObj = new Texture(texture, 1, 1);
         this.cache.set(key, texObj);
+
+        MemoryTracker.getInstance().track(
+            MemoryCategory.GPU_TEXTURE,
+            `Texture_${key}`,
+            1 * 1 * 4,
+            `Texture: White Placeholder`
+        );
+
         return texObj;
     }
 
@@ -141,6 +168,7 @@ export class TextureManager {
             if (url !== "__white__") {
                 gl.deleteTexture(texture.baseTexture);
                 this.cache.delete(url);
+                MemoryTracker.getInstance().untrack(`Texture_${url}`);
             }
         }
     }

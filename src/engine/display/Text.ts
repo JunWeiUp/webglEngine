@@ -2,6 +2,7 @@ import { Node } from './Node';
 import { Renderer } from '../core/Renderer';
 import { Texture } from '../core/Texture';
 import { AtlasManager } from '../utils/AtlasManager';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class Text extends Node {
     public text: string = "";
@@ -33,6 +34,7 @@ export class Text extends Node {
     // 析构时记得移除回调 (虽然 JS 没有析构，但在 destroy 方法中调用)
     public destroy() {
         AtlasManager.getInstance().offReset(this._resetHandler);
+        MemoryTracker.getInstance().untrack(`Text_Canvas_${this.id}`);
     }
 
     // 覆盖属性 setter 以触发更新
@@ -70,6 +72,14 @@ export class Text extends Node {
         if (this._canvas.width !== textWidth || this._canvas.height !== textHeight) {
             this._canvas.width = textWidth;
             this._canvas.height = textHeight;
+
+            // 追踪每个 Text 节点的临时 Canvas 内存
+            MemoryTracker.getInstance().track(
+                MemoryCategory.CPU_CANVAS,
+                `Text_Canvas_${this.id}`,
+                textWidth * textHeight * 4,
+                `Text Canvas: ${this.text.substring(0, 10)}...`
+            );
         } else {
             ctx.clearRect(0, 0, textWidth, textHeight);
         }

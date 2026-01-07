@@ -4,6 +4,7 @@ import { TileLayer } from './engine/display/TileLayer';
 import { Sprite } from './engine/display/Sprite';
 import { Text } from './engine/display/Text';
 import { Container } from './engine/display/Container';
+import { MemoryTracker } from './engine/utils/MemoryProfiler';
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.style.width = '100vw';
@@ -81,7 +82,7 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalRows = 100; // 恢复为 100 行 (共 10000 个容器)
 const totalCols = 1000;
 const batchSize = 5; // 每帧处理 5 行
 
@@ -267,6 +268,8 @@ function updateStats() {
 
     const glStats = engine.renderer.stats;
     const scene = engine.scene;
+    const memTracker = MemoryTracker.getInstance();
+    const memStats = memTracker.getStats();
     
     let totalNodes = 0;
     scene.traverse(() => totalNodes++);
@@ -277,6 +280,13 @@ function updateStats() {
         Total Nodes: ${totalNodes}<br>
         Draw Calls: ${glStats.drawCalls}<br>
         Quads: ${glStats.quadCount}<br>
+        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
+        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Memory Usage</div>
+        <div style="color: #00ffff;">Total: ${MemoryTracker.formatBytes(memStats.totalBytes)}</div>
+        GPU Tex: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Texture'] || 0)}<br>
+        GPU Buf: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Buffer'] || 0)}<br>
+        CPU Canvas: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU Canvas'] || 0)}<br>
+        CPU Array: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU TypedArray'] || 0)}<br>
         <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
         <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
         Transform: ${glStats.times.transform.toFixed(2)}<br>

@@ -10,6 +10,9 @@ import type { Rect } from '../core/Rect';
  * 包含变换信息（Transform）、尺寸、交互状态等。
  */
 export class Node {
+    private static _nextId = 0;
+    public readonly id = Node._nextId++;
+
     /** 变换组件 (位置、旋转、缩放) */
     public transform: Transform = new Transform();
     
