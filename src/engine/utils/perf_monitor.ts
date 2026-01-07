@@ -5,17 +5,17 @@ export class PerfMonitor {
   private rafId = 0;
 
   start(container: HTMLElement) {
-    const stats = this.stats;
-    stats.showPanel(0);
-    stats.dom.style.left = '300px';
-    container.appendChild(stats.dom);
+    // const stats = this.stats;
+    // stats.showPanel(0);
+    // stats.dom.style.left = '300px';
+    // container.appendChild(stats.dom);
 
-    const update = () => {
-      stats.begin();
-      stats.end();
-      this.rafId = requestAnimationFrame(update);
-    };
-    this.rafId = requestAnimationFrame(update);
+    // const update = () => {
+    //   stats.begin();
+    //   stats.end();
+    //   this.rafId = requestAnimationFrame(update);
+    // };
+    // this.rafId = requestAnimationFrame(update);
   }
   destroy() {
     cancelAnimationFrame(this.rafId);

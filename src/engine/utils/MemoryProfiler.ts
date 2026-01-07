@@ -20,6 +20,8 @@ export interface MemoryStats {
 export class MemoryTracker {
     private static instance: MemoryTracker;
     private records: Map<string, MemoryStats> = new Map();
+    // 新增：类别总计，用于高性能追踪海量对象
+    private totals: Record<string, number> = {};
 
     private constructor() {}
 
@@ -54,11 +56,22 @@ export class MemoryTracker {
     }
 
     /**
+     * 高性能内存追踪（仅累加，不存储 ID）
+     * 适用于数万个小对象的场景
+     */
+    public trackCount(category: MemoryCategory, bytes: number) {
+        this.totals[category] = (this.totals[category] || 0) + bytes;
+    }
+
+    /**
      * 获取所有统计信息
      */
     public getStats() {
-        const totalByGroup: Record<string, number> = {};
+        const totalByGroup: Record<string, number> = { ...this.totals };
         let totalBytes = 0;
+
+        // 加上 totals 的部分
+        Object.values(this.totals).forEach(b => totalBytes += b);
 
         const details: MemoryStats[] = [];
 

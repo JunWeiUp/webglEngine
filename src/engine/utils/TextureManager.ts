@@ -158,6 +158,13 @@ export class TextureManager {
     }
 
     /**
+     * 获取已创建的白色纹理 (如果尚未创建则返回 null)
+     */
+    static getWhiteTexture(): Texture | null {
+        return this.cache.get("__white__") || null;
+    }
+
+    /**
      * Dispose a texture by URL and remove from cache.
      * This is crucial for LRU cache implementation to free GPU memory.
      */

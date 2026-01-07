@@ -1,7 +1,9 @@
 import { Node } from './Node';
 import { TextureManager } from '../utils/TextureManager';
 import { Texture } from '../core/Texture';
+import { Renderer } from '../core/Renderer';
 import type { IRenderer } from '../core/IRenderer';
+import type { Rect } from '../core/Rect';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 /**
@@ -12,10 +14,22 @@ import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
  * 优化了渲染性能，使用静态共享缓冲区来减少 GC。
  */
 export class Sprite extends Node {
-    /** WebGL 纹理对象 */
-    public texture: Texture | null = null;
-    /** 纹理图片的 URL */
-    public textureUrl: string = "";
+    /** 内部纹理存储 */
+    private _texture: Texture | null = null;
+    /** 用于恢复纹理的 URL，只有在需要按需加载时才存储 */
+    private _textureUrl: string | null = null;
+    /** 上次在屏幕上可见的时间戳 (ms) */
+    private _lastVisibleTime: number = 0;
+    /** 是否正在加载中 */
+    private _isLoading: boolean = false;
+
+    public get texture(): Texture | null {
+        return this._texture || TextureManager.getWhiteTexture();
+    }
+
+    public set texture(value: Texture | null) {
+        this._texture = value;
+    }
     
     // --- 颜色属性优化 ---
     // 默认使用静态共享的白色，直到用户修改
@@ -52,24 +66,30 @@ export class Sprite extends Node {
     constructor(gl: WebGL2RenderingContext, textureOrUrl?: string | Texture) {
         super();
         if (typeof textureOrUrl === 'string') {
-            this.textureUrl = textureOrUrl;
-            // 异步加载纹理
-            TextureManager.loadTexture(gl, textureOrUrl).then(tex => {
-                this.texture = tex;
-                // 如果未设置宽高，默认使用纹理宽高
-                if (this.width === 0) this.width = tex.width;
-                if (this.height === 0) this.height = tex.height;
-                this.invalidate(); // 纹理加载完成，请求重绘
-            });
+            this._textureUrl = textureOrUrl;
+            // 初始时不立即加载，等待第一次渲染时按需加载
         } else if (textureOrUrl instanceof Texture) {
-            this.texture = textureOrUrl;
+            this._texture = textureOrUrl;
             this.width = textureOrUrl.width;
             this.height = textureOrUrl.height;
         } else {
-            // 创建默认白色纹理
-            this.texture = TextureManager.createWhiteTexture(gl);
+            // 默认情况下 _texture 为 null，getter 会返回共享的白色纹理
+            // 确保全局白色纹理已创建
+            TextureManager.createWhiteTexture(gl);
             this.width = 100;
             this.height = 100;
+        }
+    }
+
+    /**
+     * 生命周期钩子：每帧检查是否需要卸载纹理以节省内存
+     */
+    protected onUpdate() {
+        // 性能优化：不需要每帧都检查，每 60 帧检查一次卸载
+        if (this._texture && this._textureUrl && (this.id % 60 === Renderer.currentTime % 60)) {
+            if (Renderer.currentTime - this._lastVisibleTime > 10000) {
+                this._texture = null;
+            }
         }
     }
 
@@ -77,8 +97,26 @@ export class Sprite extends Node {
      * WebGL 渲染实现
      * 计算世界坐标并提交给渲染器进行批处理
      */
-    renderWebGL(renderer: IRenderer) {
-        if (!this.texture) return;
+    renderWebGL(renderer: Renderer, cullingRect?: Rect) {
+        // 记录最后一次可见时间 (使用全局缓存的时间戳)
+        this._lastVisibleTime = Renderer.currentTime;
+
+        // 按需加载逻辑
+        if (!this._texture && this._textureUrl && !this._isLoading) {
+            this._isLoading = true;
+            TextureManager.loadTexture(renderer.gl, this._textureUrl).then(tex => {
+                this._texture = tex;
+                this._isLoading = false;
+                if (this.width === 0) this.width = tex.width;
+                if (this.height === 0) this.height = tex.height;
+                this.invalidate();
+            }).catch(() => {
+                this._isLoading = false;
+            });
+        }
+
+        const tex = this.texture;
+        if (!tex || !tex.baseTexture) return;
         
         // 计算四个顶点的世界坐标
         // 顺序: TL, TR, BR, BL
@@ -111,11 +149,14 @@ export class Sprite extends Node {
 
         // 提交到渲染器批次
         // 注意：现在传递 texture.baseTexture 和 texture.uvs
-        renderer.drawQuad(
-            this.texture.baseTexture,
-            Sprite.sharedVertices,
-            this.texture.uvs,
-            this.color
-        );
+        const baseTexture = tex.baseTexture;
+        if (baseTexture) {
+            renderer.drawQuad(
+                baseTexture,
+                Sprite.sharedVertices,
+                tex.uvs,
+                this.color
+            );
+        }
     }
 }

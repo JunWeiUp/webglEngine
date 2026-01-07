@@ -329,11 +329,19 @@ export class Node {
     }
 
     /**
+     * 生命周期钩子：每帧更新时调用
+     */
+    protected onUpdate(): void { }
+
+    /**
      * 递归更新变换矩阵
      * @param parentWorldMatrix 父节点的世界变换矩阵
      * @param parentDirty 父节点是否发生变化
      */
     updateTransform(parentWorldMatrix: mat3 | null, parentDirty: boolean = false) {
+        // 执行自定义更新逻辑 (如内存回收检查)
+        this.onUpdate();
+
         // 性能核心：如果父级未变、自身未变且子树也未标记为脏，则跳过整个分支
         if (!parentDirty && !this.transform.dirty && !this._subtreeDirty) {
             return;

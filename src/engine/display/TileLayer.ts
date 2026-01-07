@@ -51,8 +51,8 @@ export class TileLayer extends Node {
     })();
 
     // LRU 配置
-    private static MAX_TILES = 20000; // 最大缓存瓦片数
-    private static GC_INTERVAL = 60; // GC 间隔帧数
+    private static MAX_TILES = 1000; // 从 20000 下调至 1000 (约 256MB 显存)
+    private static GC_INTERVAL = 30; // 缩短 GC 间隔
     private gcFrameCount = 0;
 
     constructor(tileSize: number, tileSourceProvider: (x: number, y: number, z: number) => TileSource, baseZoom: number = 12) {

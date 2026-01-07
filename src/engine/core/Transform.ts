@@ -23,14 +23,7 @@ export class Transform {
     public get localMatrix(): mat3 {
         if (!this._localMatrix) {
             this._localMatrix = mat3.create();
-            if (this.ownerId !== -1) {
-                MemoryTracker.getInstance().track(
-                    MemoryCategory.CPU_TYPED_ARRAY,
-                    `Node_${this.ownerId}_localMatrix`,
-                    9 * 4,
-                    `Node ${this.ownerId} Local Matrix`
-                );
-            }
+            MemoryTracker.getInstance().trackCount(MemoryCategory.CPU_TYPED_ARRAY, 9 * 4);
         }
         return this._localMatrix;
     }
@@ -38,14 +31,7 @@ export class Transform {
     public get worldMatrix(): mat3 {
         if (!this._worldMatrix) {
             this._worldMatrix = mat3.create();
-            if (this.ownerId !== -1) {
-                MemoryTracker.getInstance().track(
-                    MemoryCategory.CPU_TYPED_ARRAY,
-                    `Node_${this.ownerId}_worldMatrix`,
-                    9 * 4,
-                    `Node ${this.ownerId} World Matrix`
-                );
-            }
+            MemoryTracker.getInstance().trackCount(MemoryCategory.CPU_TYPED_ARRAY, 9 * 4);
         }
         return this._worldMatrix;
     }

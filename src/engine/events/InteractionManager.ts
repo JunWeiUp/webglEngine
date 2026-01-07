@@ -475,6 +475,10 @@ export class InteractionManager {
             // 重置状态
             this.isBoxSelecting = false;
             this.auxLayer.selectionRect = null;
+            
+            // 关键优化：释放庞大的 QuadTree 索引，它仅在框选拖拽过程中需要
+            this.quadTree = null;
+            
             this.scene.invalidate(); // 重绘以清除框选框并显示选中状态
             return;
         }

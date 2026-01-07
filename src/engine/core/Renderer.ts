@@ -46,6 +46,11 @@ export class Renderer {
     private indexBuffer: WebGLBuffer | null = null;         // 静态索引缓冲区（GPU）
 
     private projectionMatrix: mat3 = mat3.create();
+    
+    /** 当前帧序号 */
+    public frameCount: number = 0;
+    /** 当前帧全局时间戳 (ms) */
+    public static currentTime: number = 0;
 
     /**
      * 初始化渲染器
@@ -314,8 +319,12 @@ void main() {
      */
     public render(scene: Node, dirtyRect?: Rect) {
         const startTime = performance.now();
+        Renderer.currentTime = startTime; // 更新全局时间
+        
+        // 递增帧序号
+        this.frameCount++;
+
         // 重置统计
-        this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
 
         // 1. 设置 WebGL Scissor Test (裁剪测试)

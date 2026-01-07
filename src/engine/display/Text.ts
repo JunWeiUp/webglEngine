@@ -11,8 +11,11 @@ export class Text extends Node {
     public fontFamily: string = "Arial";
 
     private _texture: Texture | null = null; // 引用 Atlas 纹理
-    private _canvas: HTMLCanvasElement | null = null;
     private _contentDirty: boolean = true; 
+    
+    // 静态共享 Canvas，减少数万个 Text 节点创建 Canvas 的开销
+    private static sharedCanvas: HTMLCanvasElement | null = null;
+    private static sharedCtx: CanvasRenderingContext2D | null = null;
     
     // 用于 Atlas 重置回调
     private _resetHandler: () => void;
@@ -34,7 +37,6 @@ export class Text extends Node {
     // 析构时记得移除回调 (虽然 JS 没有析构，但在 destroy 方法中调用)
     public destroy() {
         AtlasManager.getInstance().offReset(this._resetHandler);
-        MemoryTracker.getInstance().untrack(`Text_Canvas_${this.id}`);
     }
 
     // 覆盖属性 setter 以触发更新
@@ -48,18 +50,26 @@ export class Text extends Node {
 
     private updateTexture(renderer: Renderer) {
         if (!this._contentDirty && this._texture) return;
-        console.log("updateTexture")
 
         // 确保 AtlasManager 已初始化
         const atlas = AtlasManager.getInstance();
         atlas.init(renderer.gl);
 
-        // 创建或复用 Canvas
-        if (!this._canvas) {
-            this._canvas = document.createElement('canvas');
+        // 初始化共享 Canvas
+        if (!Text.sharedCanvas) {
+            Text.sharedCanvas = document.createElement('canvas');
+            Text.sharedCtx = Text.sharedCanvas.getContext('2d')!;
+            
+            MemoryTracker.getInstance().track(
+                MemoryCategory.CPU_CANVAS,
+                'Text_SharedCanvas',
+                0, // 初始大小为 0
+                'Text Shared Temporary Canvas'
+            );
         }
 
-        const ctx = this._canvas.getContext('2d')!;
+        const canvas = Text.sharedCanvas;
+        const ctx = Text.sharedCtx!;
         
         // 1. 测量文本
         const font = `${this.fontSize}px ${this.fontFamily}`;
@@ -68,17 +78,16 @@ export class Text extends Node {
         const textWidth = Math.ceil(metrics.width);
         const textHeight = Math.ceil(this.fontSize * 1.2); 
 
-        // 2. 调整 Canvas 大小
-        if (this._canvas.width !== textWidth || this._canvas.height !== textHeight) {
-            this._canvas.width = textWidth;
-            this._canvas.height = textHeight;
+        // 2. 调整 Canvas 大小并更新追踪
+        if (canvas.width !== textWidth || canvas.height !== textHeight) {
+            canvas.width = textWidth;
+            canvas.height = textHeight;
 
-            // 追踪每个 Text 节点的临时 Canvas 内存
             MemoryTracker.getInstance().track(
                 MemoryCategory.CPU_CANVAS,
-                `Text_Canvas_${this.id}`,
+                'Text_SharedCanvas',
                 textWidth * textHeight * 4,
-                `Text Canvas: ${this.text.substring(0, 10)}...`
+                'Text Shared Temporary Canvas'
             );
         } else {
             ctx.clearRect(0, 0, textWidth, textHeight);
@@ -95,7 +104,7 @@ export class Text extends Node {
         this.height = textHeight;
 
         // 5. 添加到 Atlas
-        const result = atlas.add(this._canvas);
+        const result = atlas.add(canvas);
         
         if (result) {
             if (this._texture) {
