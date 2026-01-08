@@ -232,7 +232,7 @@ export class Engine {
 
         // 2. 绘制辅助内容 (Canvas 2D)
         if (drawAux || drawWebGL) {
-            this.auxLayer.render(this.renderer.ctx, this.scene);
+            this.auxLayer.render(this.renderer.ctx, this.scene, this.renderer, renderRect);
         }
 
         // 重置脏状态

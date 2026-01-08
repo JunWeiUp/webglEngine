@@ -1,5 +1,5 @@
 import { Node } from '../display/Node';
-import { mat3 } from 'gl-matrix';
+import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from './Rect';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
@@ -61,6 +61,14 @@ export class Renderer {
     private indexBuffer: WebGLBuffer | null = null;         // 静态索引缓冲区（GPU）
 
     private projectionMatrix: mat3 = mat3.create();
+    private viewMatrix: mat3 = mat3.create();
+    private viewMatrixInverse: mat3 = mat3.create();
+
+    // 缓存用于剔除计算的临时变量
+    private _tempVec2_0 = vec2.create();
+    private _tempVec2_1 = vec2.create();
+    private _tempVec2_2 = vec2.create();
+    private _tempVec2_3 = vec2.create();
 
     /** 当前帧序号 */
     private _frameCount: number = 0;
@@ -192,6 +200,7 @@ layout(location = 2) in vec4 a_color;
 layout(location = 3) in float a_textureIndex;
 
 uniform mat3 u_projectionMatrix;
+uniform mat3 u_viewMatrix;
 
 out vec2 v_texCoord;
 out vec4 v_color;
@@ -201,7 +210,7 @@ void main() {
     v_texCoord = a_texCoord;
     v_color = a_color;
     v_textureIndex = a_textureIndex;
-    gl_Position = vec4((u_projectionMatrix * vec3(a_position, 1.0)).xy, 0.0, 1.0);
+    gl_Position = vec4((u_projectionMatrix * u_viewMatrix * vec3(a_position, 1.0)).xy, 0.0, 1.0);
 }`;
 
         // 编译着色器
@@ -439,20 +448,46 @@ void main() {
     private renderNodeWebGL(root: Node, cullingRect?: Rect) {
         const stack: Node[] = [root];
 
-        const viewX = cullingRect ? cullingRect.x : 0;
-        const viewY = cullingRect ? cullingRect.y : 0;
-        const viewW = cullingRect ? cullingRect.width : this.width;
-        const viewH = cullingRect ? cullingRect.height : this.height;
-        const viewRight = viewX + viewW;
-        const viewBottom = viewY + viewH;
+        // 获取当前视口的世界坐标范围
+        const invView = this.viewMatrixInverse;
+        
+        // 视口左上角和右下角的世界坐标
+        const p0 = vec2.set(this._tempVec2_0, 0, 0);
+        const p1 = vec2.set(this._tempVec2_1, this.width, this.height);
+        const w0 = this._tempVec2_2;
+        const w1 = this._tempVec2_3;
+        vec2.transformMat3(w0, p0, invView);
+        vec2.transformMat3(w1, p1, invView);
+
+        // 世界空间下的视口范围 (AABB)
+        let viewMinX = Math.min(w0[0], w1[0]);
+        let viewMinY = Math.min(w0[1], w1[1]);
+        let viewMaxX = Math.max(w0[0], w1[0]);
+        let viewMaxY = Math.max(w0[1], w1[1]);
+
+        // 如果有特定的裁剪矩形 (脏矩形，屏幕空间)，将其进一步缩小世界空间裁剪范围
+        if (cullingRect) {
+            // 注意：cullingRect 转换后可能不再是 AABB，这里取转换后的 AABB
+            const cp0 = vec2.set(this._tempVec2_0, cullingRect.x, cullingRect.y);
+            const cp1 = vec2.set(this._tempVec2_1, cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
+            const cw0 = vec2.create(); // 这里还是需要新的，或者更多缓存
+            const cw1 = vec2.create();
+            vec2.transformMat3(cw0, cp0, invView);
+            vec2.transformMat3(cw1, cp1, invView);
+
+            viewMinX = Math.max(viewMinX, Math.min(cw0[0], cw1[0]));
+            viewMinY = Math.max(viewMinY, Math.min(cw0[1], cw1[1]));
+            viewMaxX = Math.min(viewMaxX, Math.max(cw0[0], cw1[0]));
+            viewMaxY = Math.min(viewMaxY, Math.max(cw0[1], cw1[1]));
+        }
 
         while (stack.length > 0) {
             const node = stack.pop()!;
 
-            // 1. 快速剔除 (极速 AABB 判断)
+            // 1. 快速剔除 (使用世界空间坐标进行判断)
             if (node.worldMinX !== Infinity) {
-                if (node.worldMaxX < viewX || node.worldMinX > viewRight ||
-                    node.worldMaxY < viewY || node.worldMinY > viewBottom) {
+                if (node.worldMaxX < viewMinX || node.worldMinX > viewMaxX ||
+                    node.worldMaxY < viewMinY || node.worldMinY > viewMaxY) {
                     continue; // 子树裁剪
                 }
             }
@@ -500,16 +535,38 @@ void main() {
         // 极致优化：直接访问 AABB 属性，减少属性查找
         if (node.worldMinX === Infinity) return true; // 无尺寸节点默认可见 (用于容器向下递归)
 
-        const viewX = cullingRect ? cullingRect.x : 0;
-        const viewY = cullingRect ? cullingRect.y : 0;
-        const viewW = cullingRect ? cullingRect.width : this.width;
-        const viewH = cullingRect ? cullingRect.height : this.height;
+        const invView = this.viewMatrixInverse;
+        const p0 = vec2.fromValues(0, 0);
+        const p1 = vec2.fromValues(this.width, this.height);
+        const w0 = vec2.create();
+        const w1 = vec2.create();
+        vec2.transformMat3(w0, p0, invView);
+        vec2.transformMat3(w1, p1, invView);
+
+        let viewMinX = Math.min(w0[0], w1[0]);
+        let viewMinY = Math.min(w0[1], w1[1]);
+        let viewMaxX = Math.max(w0[0], w1[0]);
+        let viewMaxY = Math.max(w0[1], w1[1]);
+
+        if (cullingRect) {
+            const cp0 = vec2.fromValues(cullingRect.x, cullingRect.y);
+            const cp1 = vec2.fromValues(cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
+            const cw0 = vec2.create();
+            const cw1 = vec2.create();
+            vec2.transformMat3(cw0, cp0, invView);
+            vec2.transformMat3(cw1, cp1, invView);
+
+            viewMinX = Math.max(viewMinX, Math.min(cw0[0], cw1[0]));
+            viewMinY = Math.max(viewMinY, Math.min(cw0[1], cw1[1]));
+            viewMaxX = Math.min(viewMaxX, Math.max(cw0[0], cw1[0]));
+            viewMaxY = Math.min(viewMaxY, Math.max(cw0[1], cw1[1]));
+        }
 
         // 高效的 AABB 相交检测
-        return !(node.worldMaxX < viewX ||
-            node.worldMinX > viewX + viewW ||
-            node.worldMaxY < viewY ||
-            node.worldMinY > viewY + viewH);
+        return !(node.worldMaxX < viewMinX ||
+            node.worldMinX > viewMaxX ||
+            node.worldMaxY < viewMinY ||
+            node.worldMinY > viewMaxY);
     }
 
     // 废弃的辅助方法 (为了兼容旧接口暂时保留)
@@ -519,6 +576,36 @@ void main() {
 
     public getProjectionMatrix() {
         return this.projectionMatrix;
+    }
+
+    /**
+     * 设置视图矩阵
+     * @param x 平移 X
+     * @param y 平移 Y
+     * @param scale 缩放比例
+     */
+    public setViewTransform(x: number, y: number, scale: number) {
+        // 构建视图矩阵: 先缩放再平移
+        mat3.identity(this.viewMatrix);
+        
+        // 缩放
+        this.viewMatrix[0] = scale;
+        this.viewMatrix[4] = scale;
+        
+        // 平移
+        this.viewMatrix[6] = x;
+        this.viewMatrix[7] = y;
+
+        // 计算逆矩阵用于坐标转换
+        mat3.invert(this.viewMatrixInverse, this.viewMatrix);
+    }
+
+    public getViewMatrix() {
+        return this.viewMatrix;
+    }
+
+    public getViewMatrixInverse() {
+        return this.viewMatrixInverse;
     }
 
     public getProgram() {
@@ -580,6 +667,10 @@ void main() {
         // 设置投影矩阵
         const uProjectionLocation = gl.getUniformLocation(program, "u_projectionMatrix");
         gl.uniformMatrix3fv(uProjectionLocation, false, this.projectionMatrix);
+
+        // 设置视图矩阵
+        const uViewLocation = gl.getUniformLocation(program, "u_viewMatrix");
+        gl.uniformMatrix3fv(uViewLocation, false, this.viewMatrix);
 
         // 执行绘制调用 (Draw Call)
         gl.drawElements(gl.TRIANGLES, this.currentQuadCount * 6, gl.UNSIGNED_SHORT, 0);

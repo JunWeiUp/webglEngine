@@ -65,22 +65,24 @@ export class TileLayer extends Node {
         this.baseZoom = baseZoom;
     }
 
-    renderWebGL(renderer: IRenderer, cullingRect?: Rect) {
+    renderWebGL(renderer: Renderer, cullingRect?: Rect) {
         // 计算全局缩放系数以确定 LOD (Level of Detail)
-        // 世界矩阵的缩放分量 (假设大致均匀缩放)
-        // m00 是 scaleX (如果没有旋转)。如果有旋转，则是第 0 列的长度。
+        // 现在需要结合视图矩阵 (Camera) 计算
+        const viewMatrix = renderer.getViewMatrix();
         const wm = this.transform.worldMatrix;
-        const globalScale = Math.hypot(wm[0], wm[1]);
+        
+        // 综合矩阵: view * world
+        const combinedMatrix = mat3.create();
+        mat3.multiply(combinedMatrix, viewMatrix, wm);
+
+        // 从综合矩阵计算缩放分量
+        const globalScale = Math.hypot(combinedMatrix[0], combinedMatrix[1]);
 
         // 计算缩放层级差异
-        // 如果 scale = 0.5, log2(0.5) = -1. 我们需要 z - 1.
-        // 如果 scale = 2.0, log2(2.0) = 1. 我们需要 z + 1.
         const zoomDiff = Math.floor(Math.log2(globalScale));
         const effectiveZoom = this.baseZoom + zoomDiff;
         
         // 计算世界单位下的有效瓦片大小
-        // 如果缩小 (diff = -1), 瓦片覆盖 2x 空间. size = 256 * 2.
-        // scaleFactor = 2 ^ (-diff)
         const scaleFactor = Math.pow(2, -zoomDiff);
         const renderTileSize = this.tileSize * scaleFactor;
 
@@ -97,9 +99,9 @@ export class TileLayer extends Node {
             vec2.fromValues(sx, sy + sh)
         ];
 
-        // 逆转世界矩阵
+        // 逆转综合矩阵，将屏幕空间坐标直接映射到 TileLayer 的局部空间
         const invertMatrix = mat3.create();
-        mat3.invert(invertMatrix, this.transform.worldMatrix);
+        mat3.invert(invertMatrix, combinedMatrix);
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 

@@ -13,8 +13,10 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
+    "@types/rbush": "^4.0.0",
     "@types/stats.js": "^0.17.4",
     "gl-matrix": "^3.4.4",
+    "rbush": "^4.0.1",
     "stats.js": "^0.17.0"
   }
 }

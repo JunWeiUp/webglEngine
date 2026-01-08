@@ -32,6 +32,11 @@ export class InteractionManager {
     private isPanning: boolean = false;
     private isBoxSelecting: boolean = false;
 
+    // 摄像机状态 (取代直接修改 scene 坐标)
+    private cameraX: number = 0;
+    private cameraY: number = 0;
+    private cameraScale: number = 1;
+
     // 记录上一帧的鼠标位置 (用于计算 delta)
     private lastMousePos: vec2 = vec2.create();
     // 框选起始点
@@ -85,7 +90,7 @@ export class InteractionManager {
     }
 
     /**
-     * 获取鼠标相对于 Canvas 的坐标
+     * 获取鼠标相对于 Canvas 的坐标 (屏幕空间)
      */
     private getMousePos(e: MouseEvent): vec2 {
         const rect = this.renderer.ctx.canvas.getBoundingClientRect();
@@ -93,8 +98,24 @@ export class InteractionManager {
     }
 
     /**
+     * 获取鼠标的世界坐标
+     */
+    private getWorldMousePos(e: MouseEvent | vec2): vec2 {
+        let pos: vec2;
+        if ('clientX' in (e as any)) {
+            pos = this.getMousePos(e as MouseEvent);
+        } else {
+            pos = e as vec2;
+        }
+        const worldPos = vec2.create();
+        vec2.transformMat3(worldPos, pos, this.renderer.getViewMatrixInverse());
+        return worldPos;
+    }
+
+    /**
      * 递归点击检测
-     * 优先检测子节点（渲染顺序在上层的）
+     * @param node 节点
+     * @param point 世界坐标点
      */
     private hitTest(node: Node, point: vec2): Node | null {
         // 1. 无空间索引，走常规 AABB 剔除 + 递归流程
@@ -154,13 +175,14 @@ export class InteractionManager {
      */
     private onMouseDown(e: MouseEvent) {
         const pos = this.getMousePos(e);
+        const worldPos = this.getWorldMousePos(pos);
         this.lastMousePos = pos;
 
         // 检查是否触发框选 (Shift + Click/Drag)
         if (e.shiftKey) {
             this.isBoxSelecting = true;
-            vec2.copy(this.boxSelectStart, pos);
-            this.auxLayer.selectionRect = { start: vec2.clone(pos), end: vec2.clone(pos) };
+            vec2.copy(this.boxSelectStart, worldPos);
+            this.auxLayer.selectionRect = { start: vec2.clone(worldPos), end: vec2.clone(worldPos) };
 
             // 简单策略：开始框选时清空已有选择
             this.auxLayer.selectedNodes.clear();
@@ -169,19 +191,19 @@ export class InteractionManager {
             return;
         }
 
-        // 正常的点击检测
-        const hit = this.hitTest(this.scene, pos);
+        // 正常的点击检测 (使用世界坐标)
+        const hit = this.hitTest(this.scene, worldPos);
 
         if (hit) {
             // 如果点击了已选中的节点，保持选中状态并准备拖拽
             if (this.auxLayer.selectedNodes.has(hit)) {
                 this.auxLayer.draggingNode = hit; // 设置为主拖拽手柄
-                vec2.copy(this.auxLayer.dragProxyPos, pos);
+                vec2.copy(this.auxLayer.dragProxyPos, worldPos);
             } else {
                 // 单选模式 (替换选择)
                 this.auxLayer.selectedNode = hit;
                 this.auxLayer.draggingNode = hit;
-                vec2.copy(this.auxLayer.dragProxyPos, pos);
+                vec2.copy(this.auxLayer.dragProxyPos, worldPos);
             }
         } else {
             // 点击空白处，取消选择并开始平移画布
@@ -228,8 +250,8 @@ export class InteractionManager {
      * 鼠标移动事件处理
      */
     private onMouseMove(e: MouseEvent) {
-        console.log("onMouseMove")
         const pos = this.getMousePos(e);
+        const worldPos = this.getWorldMousePos(pos);
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
         let needsRender = false;
@@ -242,10 +264,10 @@ export class InteractionManager {
         // 1. 处理框选 (实时预览)
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
             const b0 = performance.now();
-            vec2.copy(this.auxLayer.selectionRect.end, pos);
+            vec2.copy(this.auxLayer.selectionRect.end, worldPos);
             this.lastMousePos = pos;
 
-            // 实时更新选中状态 (Optional: 如果性能允许)
+            // 实时更新选中状态
             const start = this.auxLayer.selectionRect.start;
             const end = this.auxLayer.selectionRect.end;
             const minX = Math.min(start[0], end[0]);
@@ -261,13 +283,13 @@ export class InteractionManager {
             return;
         }
 
-        // 2. 处理悬停高亮 (仅在未拖拽/平移/框选时)
+        // 2. 处理悬停高亮 (使用世界坐标检测)
         if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
             const h0 = performance.now();
-            const hit = this.hitTest(this.scene, pos);
+            const hit = this.hitTest(this.scene, worldPos);
             this.renderer.stats.times.hitTest = performance.now() - h0;
             if (this.auxLayer.hoveredNode !== hit) {
-                // 优化：仅重绘变脏的区域 (旧高亮节点 + 新高亮节点)
+                // 优化：仅重绘变脏的区域
                 const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
 
                 this.auxLayer.hoveredNode = hit;
@@ -277,7 +299,6 @@ export class InteractionManager {
                 if (this.onHoverChange) this.onHoverChange();
                 this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
 
-                // 提交脏矩形 (扩大范围以包含高亮边框)
                 const padding = 4;
                 if (oldBounds) {
                     oldBounds.x -= padding;
@@ -293,53 +314,47 @@ export class InteractionManager {
                     newBounds.height += padding * 2;
                     this.engine.invalidateAuxArea(newBounds);
                 }
-
-                // 如果没有脏矩形 (例如从空白移到空白)，无需重绘
-                // 但 onHoverChange 可能会更新 OutlineView
-                // OutlineView.updateHighlight() 仅改变 DOM 样式，不需要 WebGL 重绘
-                // 所以不需要 scene.invalidate()
-
-                // 注意：invalidateArea 内部会调用 requestRender，所以这里不需要 needsRender = true
-                // 除非我们fallback到全屏渲染
-                if (!oldBounds && !newBounds) {
-                    // 无变化？不，hit 可能变了 (null -> null?)
-                }
             }
         }
 
-        // 3. 处理拖拽节点
+        // 3. 处理拖拽节点 (将屏幕 delta 转换为世界空间 delta)
         if (this.auxLayer.draggingNode) {
             const draggingNode = this.auxLayer.draggingNode;
-            // 获取所有需要移动的顶层节点
             const topLevelNodes = this.getTopLevelSelectedNodes();
 
-            // 对每个节点应用移动增量
+            // 计算世界空间下的位移增量
+            // delta_world = delta_screen / cameraScale
+            const worldDeltaX = deltaX / this.cameraScale;
+            const worldDeltaY = deltaY / this.cameraScale;
+
             for (const node of topLevelNodes) {
                 const parent = node.parent;
                 if (parent) {
-                    // 将屏幕空间的 delta 转换为父节点局部空间的 delta
+                    // 将世界空间的 delta 转换为父节点局部空间的 delta
                     const invertParent = mat3.create();
                     mat3.invert(invertParent, parent.transform.worldMatrix);
 
                     const m = invertParent;
-                    const localDeltaX = deltaX * m[0] + deltaY * m[3];
-                    const localDeltaY = deltaX * m[1] + deltaY * m[4];
+                    // 注意：这里由于 worldMatrix 已经包含了节点的层级变换，
+                    // 我们需要的是相对于世界坐标系的位移在局部空间的分量。
+                    // 简化处理：node.x += worldDeltaX (如果父节点是根节点且没旋转)
+                    // 准确处理：
+                    const localDeltaX = worldDeltaX * m[0] + worldDeltaY * m[3];
+                    const localDeltaY = worldDeltaX * m[1] + worldDeltaY * m[4];
 
                     node.x += localDeltaX;
                     node.y += localDeltaY;
-                    // node.transform.dirty = true; // Handled by setter
-                    // needsRender = true; // Handled by setter
                 }
             }
 
-            // 4. 检测放置目标 (Drop Target)
+            // 4. 检测放置目标 (使用世界坐标)
             const originalInteractives = new Map<Node, boolean>();
             for (const node of topLevelNodes) {
                 originalInteractives.set(node, node.interactive);
                 node.interactive = false;
             }
 
-            const hit = this.hitTest(this.scene, pos);
+            const hit = this.hitTest(this.scene, worldPos);
 
             for (const node of topLevelNodes) {
                 node.interactive = originalInteractives.get(node) || false;
@@ -363,15 +378,14 @@ export class InteractionManager {
             const newTarget = (target && isValidTarget) ? target : null;
             if (this.auxLayer.dragTargetNode !== newTarget) {
                 this.auxLayer.dragTargetNode = newTarget;
-                // 目标改变，虽然在同一帧移动通常也会重绘，但明确标记更安全
             }
 
             needsRender = true;
         } else if (this.isPanning) {
-            // 5. 处理画布平移
-            this.scene.x += deltaX;
-            this.scene.y += deltaY;
-            // this.scene.transform.dirty = true;
+            // 5. 处理画布平移 (更新摄像机)
+            this.cameraX += deltaX;
+            this.cameraY += deltaY;
+            this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
             needsRender = true;
         }
 
@@ -379,7 +393,6 @@ export class InteractionManager {
             this.scene.invalidate();
         }
 
-        // 更新位置记录，用于下一帧计算 delta
         this.lastMousePos = pos;
     }
 
@@ -518,57 +531,50 @@ export class InteractionManager {
      * 3. 触控板双指滑动 -> 平移 (deltaMode = 0)
      */
     private onWheel(e: WheelEvent) {
-        console.log("onWheel")
         e.preventDefault();
 
         // 判定是否为缩放操作
-        // 1. 按下 Ctrl 键 (触控板捏合的标准行为，或 Ctrl+滚轮)
-        // 2. DeltaMode 为 LINE (1) 或 PAGE (2) (通常是鼠标滚轮)
-        // 注意：某些鼠标驱动可能在 pixel 模式下发送数据，这里主要区分触控板滑动
         const isZoom = e.ctrlKey || e.deltaMode !== 0;
 
-        // 只有当值确实发生变化时才进行操作
         const t0 = performance.now();
 
         if (isZoom) {
             // --- 缩放逻辑 ---
             const zoomSpeed = 0.005;
-            // 如果是 ctrlKey (捏合)，deltaY 通常较小，需要更大的系数？
-            // 实际上浏览器已经标准化了 deltaY。
-            // 对于捏合，deltaY 为负是放大。
             const scaleChange = 1 - e.deltaY * zoomSpeed;
 
             const pos = this.getMousePos(e);
+            const oldScale = this.cameraScale;
+            let newScale = oldScale * scaleChange;
 
-            const oldScale = this.scene.transform.scaleX;
-            const newScale = oldScale * scaleChange;
-
-            if (newScale < 0.1 || newScale > 10) return;
+            // 限制缩放范围
+            if (newScale < 0.1) newScale = 0.1;
+            if (newScale > 10) newScale = 10;
+            
+            const actualScaleChange = newScale / oldScale;
 
             const mouseX = pos[0];
             const mouseY = pos[1];
-            const transX = this.scene.transform.x;
-            const transY = this.scene.transform.y;
 
-            const newTransX = mouseX - (mouseX - transX) * scaleChange;
-            const newTransY = mouseY - (mouseY - transY) * scaleChange;
+            // 以鼠标位置为中心缩放:
+            // 屏幕坐标 = 世界坐标 * 缩放 + 平移
+            // mousePos = worldPos * oldScale + oldPan
+            // mousePos = worldPos * newScale + newPan
+            // => newPan = mousePos - (mousePos - oldPan) * (newScale / oldScale)
+            
+            this.cameraX = mouseX - (mouseX - this.cameraX) * actualScaleChange;
+            this.cameraY = mouseY - (mouseY - this.cameraY) * actualScaleChange;
+            this.cameraScale = newScale;
 
-            // 4. 更新场景变换 (一次性设置，减少计算)
-            this.scene.setTransform(newTransX, newTransY, newScale, newScale);
+            this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
         } else {
             // --- 平移逻辑 (触控板双指滑动) ---
-            // 反向：手指向上推(deltaY > 0)，内容应该向上跑(y 减小)？
-            // 浏览器标准：deltaY > 0 表示向下滚动。
-            // 在地图中，向下滚动 = 视口向下 = 内容向上。
-            // 所以 scene.y -= deltaY
-
-            this.scene.setTransform(
-                this.scene.x - e.deltaX,
-                this.scene.y - e.deltaY,
-                this.scene.scaleX,
-                this.scene.scaleY
-            );
+            this.cameraX -= e.deltaX;
+            this.cameraY -= e.deltaY;
+            this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
         }
+
+        this.scene.invalidate();
 
         if (Renderer.instance) {
             Renderer.instance.stats.times.nodeTransform = (performance.now() - t0);

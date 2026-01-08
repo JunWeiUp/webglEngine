@@ -33,7 +33,8 @@ export class AuxiliaryLayer {
     constructor() { }
 
 
-    render(ctx: CanvasRenderingContext2D, scene: Node, dirtyRect?: Rect) {
+    render(ctx: CanvasRenderingContext2D, scene: Node, renderer: any, dirtyRect?: Rect) {
+        const viewMatrix = renderer.getViewMatrix();
         // Reset transform to identity to draw in screen space
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (dirtyRect) {
@@ -51,23 +52,23 @@ export class AuxiliaryLayer {
         // Iterate over all selected nodes
         for (const node of this.selectedNodes) {
             if (node !== this.draggingNode) {
-                this.drawBounds(ctx, node, '#0000ff', 2, false, dirtyRect);
+                this.drawBounds(ctx, node, viewMatrix, '#0000ff', 2, false, dirtyRect);
             }
         }
 
         // 2. Draw Hover
         if (this.hoveredNode && !this.selectedNodes.has(this.hoveredNode) && this.hoveredNode !== this.draggingNode) {
-            this.drawBounds(ctx, this.hoveredNode, '#ffff00', 2, false, dirtyRect);
+            this.drawBounds(ctx, this.hoveredNode, viewMatrix, '#ffff00', 2, false, dirtyRect);
         }
 
         // 3. Draw Dragging Logic
         if (this.draggingNode) {
             // Draw Target Highlight (where we will drop)
             if (this.dragTargetNode) {
-                this.drawBounds(ctx, this.dragTargetNode, '#00ff00', 3, true, dirtyRect);
+                this.drawBounds(ctx, this.dragTargetNode, viewMatrix, '#00ff00', 3, true, dirtyRect);
 
                 // Optional: Draw text saying "Drop here"
-                const bounds = this.getScreenBounds(this.dragTargetNode);
+                const bounds = this.getScreenBounds(this.dragTargetNode, viewMatrix);
                 if (bounds && this.rectIntersects(bounds, dirtyRect)) {
                     ctx.fillStyle = '#00ff00';
                     ctx.font = '12px Arial';
@@ -76,7 +77,7 @@ export class AuxiliaryLayer {
             }
 
             // Draw Selection for Dragging Node (since it moves with mouse now)
-            this.drawBounds(ctx, this.draggingNode, '#0000ff', 2, false, dirtyRect);
+            this.drawBounds(ctx, this.draggingNode, viewMatrix, '#0000ff', 2, false, dirtyRect);
         }
 
         // 4. Draw Selection Box
@@ -84,10 +85,16 @@ export class AuxiliaryLayer {
             const start = this.selectionRect.start;
             const end = this.selectionRect.end;
 
-            const x = Math.min(start[0], end[0]);
-            const y = Math.min(start[1], end[1]);
-            const w = Math.abs(end[0] - start[0]);
-            const h = Math.abs(end[1] - start[1]);
+            // 转换世界坐标到屏幕坐标
+            const sStart = vec2.create();
+            const sEnd = vec2.create();
+            vec2.transformMat3(sStart, start, viewMatrix);
+            vec2.transformMat3(sEnd, end, viewMatrix);
+
+            const x = Math.min(sStart[0], sEnd[0]);
+            const y = Math.min(sStart[1], sEnd[1]);
+            const w = Math.abs(sEnd[0] - sStart[0]);
+            const h = Math.abs(sEnd[1] - sStart[1]);
 
             // Check intersection
             if (!dirtyRect || (
@@ -118,13 +125,18 @@ export class AuxiliaryLayer {
             bounds.maxY < dirtyRect.y);
     }
 
-    private getGlobalScale(node: Node): number {
-        // Approximate global scale
-        const m = node.transform.worldMatrix;
+    private getGlobalScale(node: Node, viewMatrix: mat3): number {
+        // Approximate global scale including view matrix
+        const m = mat3.create();
+        mat3.multiply(m, viewMatrix, node.transform.worldMatrix);
         return Math.hypot(m[0], m[1]);
     }
 
-    private getScreenBounds(node: Node): { minX: number, minY: number, maxX: number, maxY: number } | null {
+    private getScreenBounds(node: Node, viewMatrix: mat3): { minX: number, minY: number, maxX: number, maxY: number } | null {
+        // Combined matrix: view * world
+        const combined = mat3.create();
+        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+
         // Transform 4 corners of the node to screen space
         // Node local corners: (0,0), (w,0), (w,h), (0,h)
         const corners = [
@@ -138,7 +150,7 @@ export class AuxiliaryLayer {
 
         for (const p of corners) {
             const screen = vec2.create();
-            vec2.transformMat3(screen, p, node.transform.worldMatrix);
+            vec2.transformMat3(screen, p, combined);
             minX = Math.min(minX, screen[0]);
             minY = Math.min(minY, screen[1]);
             maxX = Math.max(maxX, screen[0]);
@@ -148,8 +160,8 @@ export class AuxiliaryLayer {
         return { minX, minY, maxX, maxY };
     }
 
-    private drawBounds(ctx: CanvasRenderingContext2D, node: Node, color: string, lineWidth: number, dashed: boolean = false, dirtyRect?: Rect) {
-        const bounds = this.getScreenBounds(node);
+    private drawBounds(ctx: CanvasRenderingContext2D, node: Node, viewMatrix: mat3, color: string, lineWidth: number, dashed: boolean = false, dirtyRect?: Rect) {
+        const bounds = this.getScreenBounds(node, viewMatrix);
         if (!bounds) return;
 
         // Culling
@@ -165,10 +177,9 @@ export class AuxiliaryLayer {
             ctx.setLineDash([]);
         }
 
-        // We draw an AABB in screen space. 
-        // Note: If the node is rotated, AABB might be loose. 
-        // For precise bounds, we should draw the polygon connected by the 4 transformed corners.
-        // Let's draw the polygon for better visual accuracy.
+        // Combined matrix: view * world
+        const combined = mat3.create();
+        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
 
         const corners = [
             vec2.fromValues(0, 0),
@@ -180,7 +191,7 @@ export class AuxiliaryLayer {
         ctx.beginPath();
         for (let i = 0; i < 4; i++) {
             const screen = vec2.create();
-            vec2.transformMat3(screen, corners[i], node.transform.worldMatrix);
+            vec2.transformMat3(screen, corners[i], combined);
             if (i === 0) ctx.moveTo(screen[0], screen[1]);
             else ctx.lineTo(screen[0], screen[1]);
         }

@@ -82,8 +82,8 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 100; // 恢复为 100 行 (共 10000 个容器)
-const totalCols = 100;
+const totalRows = 400; // 恢复为 100 行 (共 10000 个容器)
+const totalCols = 1000;
 const batchSize = 5; // 每帧处理 5 行
 
 let currentRow = 0;
