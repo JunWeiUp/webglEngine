@@ -82,8 +82,8 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 100; // 恢复为 100 行 (共 10000 个容器)
-const totalCols = 1000;
+const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalCols = 100;
 const batchSize = 5; // 每帧处理 5 行
 
 let currentRow = 0;
@@ -253,26 +253,39 @@ statsContainer.style.pointerEvents = 'none';
 statsContainer.style.zIndex = '1000';
 document.body.appendChild(statsContainer);
 
-let lastTime = performance.now();
+let lastUpdateTime = 0;
+let totalNodes = 0;
 let frames = 0;
 let fps = 0;
+let lastFpsTime = performance.now();
 
-function updateStats() {
-    const now = performance.now();
+function updateStats(time: number) {
+    // 每一帧都增加帧计数，用于计算准确的 FPS
     frames++;
-    if (now > lastTime + 1000) {
-        fps = Math.round((frames * 1000) / (now - lastTime));
-        lastTime = now;
+    const now = performance.now();
+    if (now > lastFpsTime + 1000) {
+        fps = Math.round((frames * 1000) / (now - lastFpsTime));
+        lastFpsTime = now;
         frames = 0;
     }
+
+    // 每 200ms 更新一次 UI，而不是每帧 (16ms)
+    if (time - lastUpdateTime < 300) {
+        requestAnimationFrame(updateStats);
+        return;
+    }
+    lastUpdateTime = time;
 
     const glStats = engine.renderer.stats;
     const scene = engine.scene;
     const memTracker = MemoryTracker.getInstance();
     const memStats = memTracker.getStats();
     
-    let totalNodes = 0;
-    scene.traverse(() => totalNodes++);
+    // 只有当节点数量可能变化时才重新遍历 (或者简单地每秒遍历一次)
+    if (totalNodes === 0 || Math.random() < 0.05) {
+        totalNodes = 0;
+        scene.traverse(() => totalNodes++);
+    }
 
     statsContainer.innerHTML = `
         <div style="font-weight: bold; color: #fff; margin-bottom: 5px;">Performance Monitor</div>
@@ -298,7 +311,7 @@ function updateStats() {
     `;
     requestAnimationFrame(updateStats);
 }
-updateStats();
+requestAnimationFrame(updateStats);
 
 // Debug Toggle for QuadTree
 createButton("显示四叉树 (Debug)", () => {

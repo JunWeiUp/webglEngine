@@ -47,6 +47,14 @@ export class Renderer {
 
     private projectionMatrix: mat3 = mat3.create();
     
+    // 缓存状态，用于跳过重复计算
+    private lastSceneVersion: number = -1;
+    private lastViewX: number = -1;
+    private lastViewY: number = -1;
+    private lastViewW: number = -1;
+    private lastViewH: number = -1;
+    private cachedVisibleNodes: Node[] = [];
+
     /** 当前帧序号 */
     public frameCount: number = 0;
     /** 当前帧全局时间戳 (ms) */
@@ -318,6 +326,19 @@ void main() {
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
     public render(scene: Node, dirtyRect?: Rect) {
+        // 性能核心：如果场景没有脏，且没有提供脏矩形（全屏重绘请求），
+        // 且视口也没有变化，理论上可以完全跳过。
+        // 但为了安全，我们至少要检查一次 subtreeDirty。
+        
+        if (!scene.subtreeDirty && !scene.transform.dirty && !dirtyRect && this.cachedVisibleNodes.length > 0) {
+            // 检查视口是否变化
+            const viewX = 0; // 简化处理
+            const viewY = 0;
+            if (this.lastViewX === viewX && this.lastViewY === viewY) {
+                return; 
+            }
+        }
+
         const startTime = performance.now();
         Renderer.currentTime = startTime; // 更新全局时间
         
@@ -397,6 +418,28 @@ void main() {
         const viewW = cullingRect ? cullingRect.width : this.width;
         const viewH = cullingRect ? cullingRect.height : this.height;
 
+        // 检查缓存：如果场景没变且视口没变，直接使用缓存的节点
+        const viewChanged = viewX !== this.lastViewX || viewY !== this.lastViewY || viewW !== this.lastViewW || viewH !== this.lastViewH;
+        const sceneChanged = scene.subtreeDirty || scene.transform.dirty;
+
+        if (!viewChanged && !sceneChanged && this.cachedVisibleNodes.length > 0) {
+            this.stats.times.spatialQuery = 0;
+            const r0 = performance.now();
+            const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
+            for (const node of this.cachedVisibleNodes) {
+                if (currentScale >= node.minVisibleScale && currentScale <= node.maxVisibleScale) {
+                    if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                        (node as any).renderWebGL(this, cullingRect);
+                    }
+                }
+            }
+            this.stats.times.renderWebGL = performance.now() - r0;
+            return;
+        }
+
+        // 更新缓存参数
+        this.lastViewX = viewX; this.lastViewY = viewY; this.lastViewW = viewW; this.lastViewH = viewH;
+
         // 将屏幕坐标转换为场景局部坐标 (考虑视口变换)
         const invScene = mat3.create();
         mat3.invert(invScene, scene.transform.worldMatrix);
@@ -423,8 +466,8 @@ void main() {
         const queryRect: Rect = { x: sMinX, y: sMinY, width: sMaxX - sMinX, height: sMaxY - sMinY };
 
         // 2. 查询空间索引
-        const visibleNodes: Node[] = [];
-        scene.spatialIndex.retrieve(visibleNodes, queryRect);
+        this.cachedVisibleNodes.length = 0;
+        scene.spatialIndex.retrieve(this.cachedVisibleNodes, queryRect);
         this.stats.times.spatialQuery = performance.now() - q0;
 
         const r0 = performance.now();
@@ -432,7 +475,7 @@ void main() {
         const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
 
         // 4. 渲染可见节点
-        for (const node of visibleNodes) {
+        for (const node of this.cachedVisibleNodes) {
             // LOD 检查
             if (currentScale < node.minVisibleScale || currentScale > node.maxVisibleScale) {
                 continue;

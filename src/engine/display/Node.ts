@@ -58,8 +58,15 @@ export class Node {
     public get isSelected(): boolean { return (this._flags & Node.BIT_SELECTED) !== 0; }
     public set isSelected(v: boolean) { if (v) this._flags |= Node.BIT_SELECTED; else this._flags &= ~Node.BIT_SELECTED; }
 
-    private get _subtreeDirty(): boolean { return (this._flags & Node.BIT_SUBTREE_DIRTY) !== 0; }
-    private set _subtreeDirty(v: boolean) { if (v) this._flags |= Node.BIT_SUBTREE_DIRTY; else this._flags &= ~Node.BIT_SUBTREE_DIRTY; }
+    public get subtreeDirty(): boolean { return (this._flags & Node.BIT_SUBTREE_DIRTY) !== 0; }
+    public set subtreeDirty(v: boolean) { 
+        if (v && !(this._flags & Node.BIT_SUBTREE_DIRTY)) {
+            this._flags |= Node.BIT_SUBTREE_DIRTY;
+            if (this.parent) this.parent.subtreeDirty = true;
+        } else if (!v) {
+            this._flags &= ~Node.BIT_SUBTREE_DIRTY;
+        }
+    }
 
     /** 节点名称 (调试用，可选以节省内存) */
     public name?: string;
@@ -137,8 +144,8 @@ export class Node {
     public markTransformDirty() {
         this.transform.dirty = true;
         let p = this.parent;
-        while (p && !p._subtreeDirty) {
-            p._subtreeDirty = true;
+        while (p && !p.subtreeDirty) {
+            p.subtreeDirty = true;
             p = p.parent;
         }
     }
@@ -343,7 +350,7 @@ export class Node {
         this.onUpdate();
 
         // 性能核心：如果父级未变、自身未变且子树也未标记为脏，则跳过整个分支
-        if (!parentDirty && !this.transform.dirty && !this._subtreeDirty) {
+        if (!parentDirty && !this.transform.dirty && !this.subtreeDirty) {
             return;
         }
 
@@ -370,15 +377,15 @@ export class Node {
 
         // 3. 递归更新所有子节点
         // 如果 worldDirty 为 true，子节点必须更新
-        // 如果 worldDirty 为 false，仅当 _subtreeDirty 为 true 时才进入子节点
-        if (this._children && (worldDirty || this._subtreeDirty)) {
+        // 如果 worldDirty 为 false，仅当 subtreeDirty 为 true 时才进入子节点
+        if (this._children && (worldDirty || this.subtreeDirty)) {
             for (const child of this._children) {
                 child.updateTransform(this.transform.worldMatrix, worldDirty);
             }
         }
 
         // 清除子树脏标记
-        this._subtreeDirty = false;
+        this.subtreeDirty = false;
     }
 
     /**

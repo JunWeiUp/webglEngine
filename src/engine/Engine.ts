@@ -28,7 +28,7 @@ export class Engine {
 
     // 渲染请求 ID (防抖动)
     private _rafId: number | null = null;
-    
+
     // 脏矩形管理
     private dirtyRect: Rect | null = null;
     private fullInvalidate: boolean = true; // 默认第一帧全屏渲染
@@ -92,8 +92,8 @@ export class Engine {
         // 初始渲染
         this.requestRender();
 
-       let  perfMonitor = new PerfMonitor();
-       perfMonitor.start(container);
+        let perfMonitor = new PerfMonitor();
+        perfMonitor.start(container);
     }
 
     /**
@@ -126,7 +126,7 @@ export class Engine {
             const minY = Math.min(this.dirtyRect.y, paddedRect.y);
             const maxX = Math.max(this.dirtyRect.x + this.dirtyRect.width, paddedRect.x + paddedRect.width);
             const maxY = Math.max(this.dirtyRect.y + this.dirtyRect.height, paddedRect.y + paddedRect.height);
-            
+
             this.dirtyRect.x = minX;
             this.dirtyRect.y = minY;
             this.dirtyRect.width = maxX - minX;
@@ -162,6 +162,8 @@ export class Engine {
     public requestRender() {
         if (this._rafId === null) {
             this._rafId = requestAnimationFrame(() => {
+                console.log("engine requestAnimationFrame")
+
                 this.loop();
                 if (this.alwaysRender) {
                     this._rafId = null;
@@ -178,17 +180,27 @@ export class Engine {
      */
     private loop() {
         // 确定渲染区域
-        const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
         const drawWebGL = this.sceneDirty || this.fullInvalidate;
+        const drawAux = this.dirtyRect !== null || this.fullInvalidate;
 
-        // 1. WebGL Pass (包括 Sprite 和 Text)
+        if (!drawWebGL && !drawAux) {
+            // 如果什么都不需要画，直接退出
+            this._rafId = null;
+            return;
+        }
+
+        const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
+
+        // 1. WebGL Pass
         if (drawWebGL) {
             this.renderer.render(this.scene, renderRect);
         }
 
-        // 2. 绘制辅助内容
-        this.auxLayer.render(this.renderer.ctx, this.scene);
-        
+        // 2. 绘制辅助内容 (Canvas 2D)
+        if (drawAux || drawWebGL) {
+            this.auxLayer.render(this.renderer.ctx, this.scene);
+        }
+
         // 重置脏状态
         this.fullInvalidate = false;
         this.sceneDirty = false;

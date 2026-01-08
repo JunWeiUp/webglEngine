@@ -239,8 +239,12 @@ export class InteractionManager {
         const pos = this.getMousePos(e);
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
-
         let needsRender = false;
+
+        // 性能优化：如果鼠标位置几乎没动，跳过检测
+        if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1 && !this.isBoxSelecting) {
+            return;
+        }
 
         // 1. 处理框选 (实时预览)
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
@@ -366,19 +370,21 @@ export class InteractionManager {
                 // 目标改变，虽然在同一帧移动通常也会重绘，但明确标记更安全
             }
 
+            needsRender = true;
         } else if (this.isPanning) {
             // 5. 处理画布平移
             this.scene.x += deltaX;
             this.scene.y += deltaY;
             // this.scene.transform.dirty = true;
-            // needsRender = true;
+            needsRender = true;
         }
-
-        this.lastMousePos = pos;
 
         if (needsRender) {
             this.scene.invalidate();
         }
+
+        // 更新位置记录，用于下一帧计算 delta
+        this.lastMousePos = pos;
     }
 
     /**
