@@ -525,10 +525,7 @@ export class InteractionManager {
                 }
             }
 
-            node.x = newX;
-            node.y = newY;
-            node.width = newW;
-            node.height = newH;
+            node.set(newX, newY, newW, newH);
 
             this.lastMousePos = pos;
             this.scene.invalidate();

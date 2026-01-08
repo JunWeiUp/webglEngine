@@ -195,6 +195,24 @@ export class Node {
         });
     }
 
+    /**
+     * 同时设置位置和尺寸，减少冗余计算和失效通知
+     */
+    public set(x: number, y: number, width: number, height: number) {
+        if (this.transform.x === x && this.transform.y === y && 
+            this._width === width && this._height === height) {
+            return;
+        }
+
+        this.markTransformDirty();
+
+        this.invalidateWithSelfBounds(() => {
+            this.transform.setPosition(x, y);
+            this._width = width;
+            this._height = height;
+        });
+    }
+
     get rotation(): number { return this.transform.rotation; }
     set rotation(value: number) {
         if (this.transform.rotation !== value) {
