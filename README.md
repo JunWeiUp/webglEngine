@@ -90,7 +90,7 @@ src/
 ## 📝 待办 / 计划 (Future Optimizations)
 
 *   [ ] **静态批处理 (Static Batching)**: 对于不移动的背景物体（如 TileLayer），预先合并顶点数据，进一步减少 CPU 提交开销。
-*   [ ] **空间索引 (Spatial Indexing)**: 引入 QuadTree 或 BVH，将剔除和交互检测复杂度从 O(N) 降低到 O(logN)。
+*   [ ] **空间索引 (Spatial Indexing)**: 引入 BVH 或其他优化手段，将剔除和交互检测复杂度从 O(N) 降低到 O(logN)。
 *   [ ] **文本位图化 (SDF Fonts)**: 引入 Signed Distance Field 字体渲染，提供更高性能和无限放大清晰度。
 *   [ ] **多纹理排序 (Texture Sorting)**: 优化渲染顺序，尽量让使用相同纹理的物体靠在一起绘制，减少 Flush 次数。
 *   [ ] **WebGPU 支持**: 探索 WebGPU 后端以利用 Compute Shader 进行大规模粒子模拟。

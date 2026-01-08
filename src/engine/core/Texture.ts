@@ -3,6 +3,8 @@ export class Texture {
     public uvs: Float32Array; // [u0,v0, u1,v1, u2,v2, u3,v3] (TL, TR, BR, BL)
     public width: number;
     public height: number;
+    /** 引用计数，用于内存管理 */
+    public useCount: number = 0;
 
     constructor(baseTexture: WebGLTexture, width: number, height: number, uvs?: Float32Array) {
         this.baseTexture = baseTexture;

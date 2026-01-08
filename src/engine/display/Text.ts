@@ -34,9 +34,10 @@ export class Text extends Node {
         AtlasManager.getInstance().onReset(this._resetHandler);
     }
 
-    // 析构时记得移除回调 (虽然 JS 没有析构，但在 destroy 方法中调用)
-    public destroy() {
+    // 销毁时记得移除回调
+    public dispose() {
         AtlasManager.getInstance().offReset(this._resetHandler);
+        super.dispose();
     }
 
     // 覆盖属性 setter 以触发更新
@@ -103,8 +104,9 @@ export class Text extends Node {
         this.width = textWidth;
         this.height = textHeight;
 
-        // 5. 添加到 Atlas
-        const result = atlas.add(canvas);
+        // 5. 添加到 Atlas (带上 key 进行去重)
+        const key = `${this.text}_${this.fontSize}_${this.fillStyle}_${this.fontFamily}`;
+        const result = atlas.add(canvas, key);
         
         if (result) {
             if (this._texture) {

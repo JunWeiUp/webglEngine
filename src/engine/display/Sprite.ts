@@ -28,6 +28,10 @@ export class Sprite extends Node {
     }
 
     public set texture(value: Texture | null) {
+        // 如果旧纹理是通过 URL 加载的，且正在更换，则需要处理引用计数
+        if (this._texture && this._textureUrl && Renderer.instance && this._texture !== value) {
+            TextureManager.disposeTexture(Renderer.instance.gl, this._textureUrl);
+        }
         this._texture = value;
     }
     
@@ -63,10 +67,10 @@ export class Sprite extends Node {
      * @param gl WebGL 上下文
      * @param textureOrUrl 纹理对象或图片路径
      */
-    constructor(gl: WebGL2RenderingContext, textureOrUrl?: string | Texture) {
+    constructor(gl: WebGL2RenderingContext, textureOrUrl?: string | Texture, key?: string) {
         super();
         if (typeof textureOrUrl === 'string') {
-            this._textureUrl = textureOrUrl;
+            this._textureUrl = key || textureOrUrl; // 如果提供了 key，优先使用 key 作为缓存标识
             // 初始时不立即加载，等待第一次渲染时按需加载
         } else if (textureOrUrl instanceof Texture) {
             this._texture = textureOrUrl;
@@ -88,7 +92,12 @@ export class Sprite extends Node {
         // 性能优化：不需要每帧都检查，每 60 帧检查一次卸载
         if (this._texture && this._textureUrl && (this.id % 60 === Renderer.currentTime % 60)) {
             if (Renderer.currentTime - this._lastVisibleTime > 10000) {
-                this._texture = null;
+                // 如果有 Renderer 实例且有 GL 上下文，则安全卸载
+                if (Renderer.instance && Renderer.instance.gl) {
+                    TextureManager.disposeTexture(Renderer.instance.gl, this._textureUrl);
+                    this._texture = null;
+                    // console.log(`[Sprite] Unloaded texture due to inactivity: ${this._textureUrl}`);
+                }
             }
         }
     }
@@ -158,5 +167,16 @@ export class Sprite extends Node {
                 this.color
             );
         }
+    }
+
+    /**
+     * 销毁精灵，释放纹理引用
+     */
+    dispose() {
+        if (this._texture && this._textureUrl && Renderer.instance) {
+            TextureManager.disposeTexture(Renderer.instance.gl, this._textureUrl);
+            this._texture = null;
+        }
+        super.dispose();
     }
 }

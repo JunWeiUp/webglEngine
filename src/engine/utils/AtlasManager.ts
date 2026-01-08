@@ -16,12 +16,19 @@ interface AtlasPage {
     isFull: boolean;
 }
 
+export interface AtlasResult {
+    uvs: Float32Array;
+    texture: WebGLTexture;
+}
+
 export class AtlasManager {
     private static instance: AtlasManager;
 
     private pages: AtlasPage[] = [];
+    private cache: Map<string, AtlasResult> = new Map(); // 添加缓存 map
     private gl: WebGL2RenderingContext | null = null;
     private readonly ATLAS_SIZE = 2048;
+    private readonly MAX_PAGES = 4; // 限制最大页数，超过则重置
 
     // 记录已分配的区域，以便在重置时通知使用者失效 (简单起见，目前只支持 Append，满则清空)
     // 实际生产中可能需要更复杂的 LRU 或回调机制
@@ -118,10 +125,16 @@ export class AtlasManager {
     /**
      * 将 Canvas 图像添加到图集中
      * @param source 源 Canvas
+     * @param key 可选的缓存键，用于复用相同内容的纹理
      * @returns 分配到的 UV 坐标和纹理对象
      */
-    public add(source: HTMLCanvasElement): { uvs: Float32Array, texture: WebGLTexture } | null {
+    public add(source: HTMLCanvasElement, key?: string): AtlasResult | null {
         if (!this.gl) return null;
+
+        // 如果提供了 key 且缓存中存在，则直接返回
+        if (key && this.cache.has(key)) {
+            return this.cache.get(key)!;
+        }
 
         const w = source.width + 2; // Padding 2px 防止出血
         const h = source.height + 2;
@@ -141,14 +154,28 @@ export class AtlasManager {
         if (this.canFit(currentPage, w, h)) {
             targetPage = currentPage;
         } else {
-            // 当前页放不下，标记为满（虽然可能还有碎片空间，但简单流式分配无法利用）
-            currentPage.isFull = true;
-            // 创建新页
-            targetPage = this.createPage();
-            console.log(`Created new Atlas Page #${this.pages.length}`);
+            // 当前页放不下，检查是否达到最大页数
+            if (this.pages.length >= this.MAX_PAGES) {
+                console.log(`Atlas full (${this.pages.length} pages), resetting...`);
+                this.reset();
+                // reset 后会创建一个新页，重新获取
+                targetPage = this.pages[0];
+            } else {
+                // 没到上限，创建新页
+                currentPage.isFull = true;
+                targetPage = this.createPage();
+                console.log(`Created new Atlas Page #${this.pages.length}`);
+            }
         }
 
-        return this.addToPage(targetPage, source, w, h);
+        const result = this.addToPage(targetPage, source, w, h);
+        
+        // 如果提供了 key，将结果存入缓存
+        if (key && result) {
+            this.cache.set(key, result);
+        }
+
+        return result;
     }
 
     private canFit(page: AtlasPage, w: number, h: number): boolean {
@@ -218,6 +245,7 @@ export class AtlasManager {
 
     public reset() {
         console.log("Resetting All Atlas Pages");
+        this.cache.clear(); // 清空去重缓存
         
         // 清除旧的内存记录
         for (let i = 0; i < this.pages.length; i++) {
@@ -235,5 +263,24 @@ export class AtlasManager {
         for (const cb of this.onResetCallbacks) {
             cb();
         }
+    }
+
+    /**
+     * 彻底销毁图集管理器，释放所有资源
+     */
+    public dispose() {
+        if (this.gl) {
+            for (let i = 0; i < this.pages.length; i++) {
+                const page = this.pages[i];
+                if (page.texture) {
+                    this.gl.deleteTexture(page.texture);
+                }
+                MemoryTracker.getInstance().untrack(`Atlas_Page_Canvas_${i}`);
+                MemoryTracker.getInstance().untrack(`Atlas_Page_Texture_${i}`);
+            }
+        }
+        this.pages = [];
+        this.onResetCallbacks.clear();
+        this.gl = null;
     }
 }

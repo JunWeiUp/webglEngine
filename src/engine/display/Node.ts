@@ -1,5 +1,6 @@
 import { mat3, vec2 } from 'gl-matrix';
 import { Transform } from '../core/Transform';
+import { Renderer } from '../core/Renderer';
 import type { IRenderer } from '../core/IRenderer';
 import type { Rect } from '../core/Rect';
 
@@ -34,13 +35,13 @@ export class Node {
     /** 高度 (用于包围盒/点击检测) */
     public height: number = 0;
 
-    /** 
-     * 世界坐标系下的 AABB 包围盒 (扁平化存储以节省内存)
-     */
+    /** 世界坐标系下的 AABB 包围盒 (扁平化存储以节省内存) */
     public worldMinX: number = Infinity;
     public worldMinY: number = Infinity;
     public worldMaxX: number = -Infinity;
     public worldMaxY: number = -Infinity;
+
+
 
     /** 状态位掩码 */
     private _flags: number = 8; // 默认 BIT_SUBTREE_DIRTY 为 1
@@ -70,30 +71,6 @@ export class Node {
 
     /** 节点名称 (调试用，可选以节省内存) */
     public name?: string;
-
-    /** 关联的四叉树节点 (用于高效更新/删除) */
-    public quadTreeNode: any = null;
-
-    /** 
-     * 空间索引 (仅根节点或需要独立索引的容器持有)
-     */
-    private _spatialIndex: any = null;
-
-    public get spatialIndex(): any {
-        return this._spatialIndex;
-    }
-
-    public set spatialIndex(value: any) {
-        this._spatialIndex = value;
-        // 如果设置了空间索引，自动将现有子树加入索引
-        if (value) {
-            this.traverse((node) => {
-                if (node !== this) {
-                    value.insert(node);
-                }
-            });
-        }
-    }
 
     /** 
      * 遍历节点树
@@ -155,7 +132,6 @@ export class Node {
         if (this.transform.x !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
-            if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
@@ -164,7 +140,6 @@ export class Node {
         if (this.transform.y !== value) {
             this.markTransformDirty();
             this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
-            if (this.quadTreeNode) this.quadTreeNode.update(this);
         }
     }
 
@@ -184,6 +159,23 @@ export class Node {
         }
     }
 
+    /**
+     * 同时设置位置和缩放，减少冗余计算和失效通知
+     */
+    public setTransform(x: number, y: number, scaleX: number, scaleY: number) {
+        const trans = this.transform;
+        if (trans.x === x && trans.y === y && 
+            trans.scaleX === scaleX && trans.scaleY === scaleY) {
+            return;
+        }
+
+        this.markTransformDirty();
+
+        this.invalidateWithSelfBounds(() => {
+            trans.setTransform(x, y, scaleX, scaleY);
+        });
+    }
+
     get rotation(): number { return this.transform.rotation; }
     set rotation(value: number) {
         if (this.transform.rotation !== value) {
@@ -201,29 +193,22 @@ export class Node {
         // 1. 如果是根节点，或者自身无尺寸(容器)，直接全屏重绘，跳过所有计算
         if (this.parent === null || (this.width <= 0 && this.height <= 0)) {
             changeFn();
-            // 必须更新变换，否则渲染时位置不对
-            this.updateTransform(this.parent ? this.parent.transform.worldMatrix : null, true);
-            this.invalidate(); // 全屏
+            // 移除这里的 updateTransform 递归调用！
+            // 渲染器的 render() 会在每一帧开始时统一调用 scene.updateTransform(null, false)
+            // 它会利用 subtreeDirty 标记进行按需更新，性能远高于这里的强制递归更新
+            this.invalidate(); // 全屏信号
             return;
         }
 
-        // 2. 实体节点：计算局部脏矩形
-        const oldRect = this.getBounds(true); // false = 仅自身，不递归
-        
+        // 2. 实体节点：计算局部脏矩形 (O(1))
+        const oldRect = this.getBounds(true);
         changeFn();
-        this.updateTransform(this.parent!.transform.worldMatrix, true);
-        
+        // 这里也不需要 updateTransform，因为我们只需标记脏。
+        // getBounds(true) 会在内部自动按需更新当前节点的变换（而非整个子树）。
         const newRect = this.getBounds(true);
 
-        if (oldRect && newRect) {
-            this.invalidate(this.unionRect(oldRect, newRect));
-        } else if (newRect) {
-            this.invalidate(newRect);
-        } else if (oldRect) {
-            this.invalidate(oldRect);
-        } else {
-            this.invalidate();
-        }
+        if (oldRect) this.invalidate(oldRect);
+        if (newRect) this.invalidate(newRect);
     }
 
     /**
@@ -288,12 +273,6 @@ export class Node {
         // 结构变化，标记子树脏
         this.markTransformDirty();
 
-        // 如果根节点有空间索引，将子节点及其子树加入索引
-        let root = this.getRoot();
-        if (root.spatialIndex) {
-            child.traverse(n => root.spatialIndex.insert(n));
-        }
-
         if (!first) {
             this.invalidate(); // 结构变化需要重绘
         }
@@ -310,24 +289,13 @@ export class Node {
             // 结构变化，标记子树脏
             this.markTransformDirty();
 
-            // 从空间索引移除
-            if (child.quadTreeNode) {
-                child.quadTreeNode.remove(child);
-            } else {
-                // 如果没有直接关联的 quadTreeNode，尝试从根索引深度移除
-                let root = this.getRoot();
-                if (root.spatialIndex) {
-                    child.traverse(n => root.spatialIndex.remove(n));
-                }
-            }
-
             this._children.splice(index, 1);
             child.parent = null;
             this.invalidate(); // 结构变化需要重绘
         }
     }
 
-    private getRoot(): Node {
+    public getRoot(): Node {
         let node: Node = this;
         while (node.parent) {
             node = node.parent;
@@ -464,4 +432,22 @@ export class Node {
      * @param _renderer 渲染器实例
      */
     renderWebGL(_renderer: IRenderer) { }
+
+    /**
+     * 销毁节点及其子节点，释放资源
+     */
+    dispose() {
+        if (this._children) {
+            for (const child of this._children) {
+                child.dispose();
+            }
+            this._children = null;
+        }
+
+        if (this.parent) {
+            this.parent.removeChild(this);
+        }
+
+
+    }
 }

@@ -56,6 +56,18 @@ export class MemoryTracker {
     }
 
     /**
+     * 按前缀移除内存记录
+     * @param prefix 前缀
+     */
+    public untrackByPrefix(prefix: string) {
+        for (const id of this.records.keys()) {
+            if (id.startsWith(prefix)) {
+                this.records.delete(id);
+            }
+        }
+    }
+
+    /**
      * 高性能内存追踪（仅累加，不存储 ID）
      * 适用于数万个小对象的场景
      */

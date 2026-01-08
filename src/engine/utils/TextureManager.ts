@@ -3,12 +3,68 @@ import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
 
 export class TextureManager {
     private static cache: Map<string, Texture> = new Map();
+    private static pending: Map<string, Promise<Texture>> = new Map();
+    // 使用 WeakMap 缓存原生 Image/Canvas/Bitmap 对应的 WebGL 纹理
+    private static sourceCache: WeakMap<TexImageSource, WebGLTexture> = new WeakMap();
+
+    /**
+     * 从任意源创建或获取纹理，并使用 key 进行缓存。
+     * 适用于动态生成的 Canvas 内容（如相同的瓦片、相同的图标）。
+     */
+    static getOrCreateTexture(gl: WebGL2RenderingContext, key: string, source: TexImageSource | HTMLCanvasElement): Texture {
+        if (this.cache.has(key)) {
+            const tex = this.cache.get(key)!;
+            tex.useCount++;
+            return tex;
+        }
+
+        const webglTex = this.createTextureFromSource(gl, source);
+        if (!webglTex) {
+            // 降级返回白色纹理
+            return this.createWhiteTexture(gl);
+        }
+
+        const texture = new Texture(webglTex, (source as any).width || 0, (source as any).height || 0);
+        texture.useCount++;
+        this.cache.set(key, texture);
+
+        // 追踪纹理内存
+        MemoryTracker.getInstance().track(
+            MemoryCategory.GPU_TEXTURE,
+            `Texture_${key}`,
+            (texture.width * texture.height * 4) || 0,
+            `Texture: ${key}`
+        );
+
+        return texture;
+    }
 
     static loadTexture(gl: WebGL2RenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         if (this.cache.has(url)) {
-            return Promise.resolve(this.cache.get(url)!);
+            const tex = this.cache.get(url)!;
+            tex.useCount++;
+            return Promise.resolve(tex);
         }
 
+        if (this.pending.has(url)) {
+            return this.pending.get(url)!.then(tex => {
+                tex.useCount++;
+                return tex;
+            });
+        }
+
+        const promise = this._loadTextureInternal(gl, url, signal).then(tex => {
+            tex.useCount++;
+            return tex;
+        });
+        this.pending.set(url, promise);
+        
+        return promise.finally(() => {
+            this.pending.delete(url);
+        });
+    }
+
+    private static _loadTextureInternal(gl: WebGL2RenderingContext, url: string, signal?: AbortSignal): Promise<Texture> {
         // Use modern fetch + createImageBitmap if available for off-main-thread decoding
         if (typeof createImageBitmap !== 'undefined') {
             return this.loadTextureBitmap(gl, url, signal);
@@ -119,7 +175,12 @@ export class TextureManager {
         return new Blob([ab], { type: mimeString });
     }
 
-    static createTextureFromSource(gl: WebGL2RenderingContext, source: TexImageSource): WebGLTexture | null {
+    static createTextureFromSource(gl: WebGL2RenderingContext, source: TexImageSource | HTMLImageElement | HTMLCanvasElement | ImageBitmap): WebGLTexture | null {
+        // 尝试从 WeakMap 缓存中获取
+        if (this.sourceCache.has(source)) {
+            return this.sourceCache.get(source)!;
+        }
+
         const texture = gl.createTexture();
         if (!texture) return null;
 
@@ -131,6 +192,9 @@ export class TextureManager {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+        // 存入 WeakMap 缓存
+        this.sourceCache.set(source, texture);
 
         return texture;
     }
@@ -167,15 +231,22 @@ export class TextureManager {
     /**
      * Dispose a texture by URL and remove from cache.
      * This is crucial for LRU cache implementation to free GPU memory.
+     * Now with reference counting.
      */
     static disposeTexture(gl: WebGL2RenderingContext, url: string) {
         if (this.cache.has(url)) {
             const texture = this.cache.get(url)!;
+            
             // Only dispose if it's not the white placeholder (which might be shared)
-            if (url !== "__white__") {
+            if (url === "__white__") return;
+
+            texture.useCount--;
+
+            if (texture.useCount <= 0) {
                 gl.deleteTexture(texture.baseTexture);
                 this.cache.delete(url);
                 MemoryTracker.getInstance().untrack(`Texture_${url}`);
+                // console.log(`[TextureManager] Disposed texture: ${url}`);
             }
         }
     }

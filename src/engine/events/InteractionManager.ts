@@ -2,7 +2,7 @@ import { Node } from '../display/Node';
 import { Renderer } from '../core/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
 import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
-import { QuadTree, type Rect } from '../utils/QuadTree';
+import type { Rect } from '../core/Rect';
 import type { Engine } from '../Engine';
 
 /**
@@ -20,7 +20,6 @@ export class InteractionManager {
     private renderer: Renderer;
     private scene: Node;
     private auxLayer: AuxiliaryLayer;
-    private quadTree: QuadTree | null = null; // 空间索引，用于加速框选
 
     // 回调函数：当场景树结构发生变化时触发（如拖拽改变父子关系）
     public onStructureChange: (() => void) | null = null;
@@ -38,6 +37,9 @@ export class InteractionManager {
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
 
+    // 绑定后的事件处理器，用于注销
+    private _handlers: Record<string, (e: any) => void> = {};
+
     constructor(engine: Engine, renderer: Renderer, scene: Node, auxLayer: AuxiliaryLayer) {
         this.engine = engine;
         this.renderer = renderer;
@@ -53,10 +55,33 @@ export class InteractionManager {
         // 使用 Canvas 2D 层作为事件接收源
         const canvas = this.renderer.ctx.canvas;
 
-        canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
-        canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
-        canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
-        canvas.addEventListener('wheel', this.onWheel.bind(this), { passive: false });
+        this._handlers = {
+            mousedown: this.onMouseDown.bind(this),
+            mousemove: this.onMouseMove.bind(this),
+            mouseup: this.onMouseUp.bind(this),
+            wheel: this.onWheel.bind(this)
+        };
+
+        canvas.addEventListener('mousedown', this._handlers.mousedown);
+        canvas.addEventListener('mousemove', this._handlers.mousemove);
+        canvas.addEventListener('mouseup', this._handlers.mouseup);
+        canvas.addEventListener('wheel', this._handlers.wheel, { passive: false });
+    }
+
+    /**
+     * 销毁交互管理器，移除事件监听
+     */
+    public dispose() {
+        const canvas = this.renderer.ctx.canvas;
+        canvas.removeEventListener('mousedown', this._handlers.mousedown);
+        canvas.removeEventListener('mousemove', this._handlers.mousemove);
+        canvas.removeEventListener('mouseup', this._handlers.mouseup);
+        canvas.removeEventListener('wheel', this._handlers.wheel);
+
+        this._handlers = {};
+        this.onStructureChange = null;
+        this.onSelectionChange = null;
+        this.onHoverChange = null;
     }
 
     /**
@@ -72,34 +97,26 @@ export class InteractionManager {
      * 优先检测子节点（渲染顺序在上层的）
      */
     private hitTest(node: Node, point: vec2): Node | null {
-        // 优化：利用缓存的 World AABB 进行快速剔除 (Fast Rejection)
+        // 1. 无空间索引，走常规 AABB 剔除 + 递归流程
         if (node.worldMinX !== Infinity) {
-            // 如果点不在 AABB 内，则一定不在矩形内 (Safe Rejection)。
             if (point[0] < node.worldMinX || point[0] > node.worldMaxX ||
                 point[1] < node.worldMinY || point[1] > node.worldMaxY) {
                 return null;
             }
         }
-        
-        // 如果是容器节点（如 Container），我们需要判断是否可能命中其子节点
-        // 之前的逻辑是：如果点不在容器的局部范围内，就跳过子节点。
-        // 但这假设子节点都在父节点范围内。对于 Container 这是一个约定。
-        // 既然我们有了 AABB，我们可以检查子节点的 AABB（如果子节点更新了 AABB）。
-        // 但这里我们还是用递归的方式。
 
-        // 倒序遍历子节点，保证先点击到上层物体
-        for (let i = node.children.length - 1; i >= 0; i--) {
-            const child = node.children[i];
-            const hit = this.hitTest(child, point);
+        // 倒序遍历子节点
+        const children = node.children;
+        for (let i = children.length - 1; i >= 0; i--) {
+            const hit = this.hitTest(children[i], point);
             if (hit) return hit;
         }
 
+        // 2. 自身精确检测
         if (node.interactive) {
-             // 精确检测 (Exact Hit Test)
-             // 只有通过了上面的 AABB 剔除，才会执行这里的矩阵逆变换
-             if (node.hitTest(point)) {
-                 return node;
-             }
+            if (node.hitTest(point)) {
+                return node;
+            }
         }
 
         return null;
@@ -133,28 +150,6 @@ export class InteractionManager {
     }
 
     /**
-     * 构建 QuadTree 索引
-     * 仅包含可交互的叶子节点或容器
-     */
-    private buildQuadTree() {
-        // 估算场景边界 (假设足够大，或者动态计算)
-        // 这里使用一个较大的固定边界
-        const bounds: Rect = { x: -10000, y: -10000, width: 40000, height: 40000 };
-        this.quadTree = new QuadTree(bounds);
-
-        // 递归插入节点
-        const traverse = (node: Node) => {
-            if (node.interactive && node !== this.scene) {
-                this.quadTree!.insert(node);
-            }
-            for (const child of node.children) {
-                traverse(child);
-            }
-        };
-        traverse(this.scene);
-    }
-
-    /**
      * 鼠标按下事件处理
      */
     private onMouseDown(e: MouseEvent) {
@@ -169,10 +164,7 @@ export class InteractionManager {
 
             // 简单策略：开始框选时清空已有选择
             this.auxLayer.selectedNodes.clear();
-            
-            // 构建 QuadTree 以加速后续的框选计算
-            this.buildQuadTree();
-            
+
             this.scene.invalidate(); // 状态变更，重绘
             return;
         }
@@ -236,6 +228,7 @@ export class InteractionManager {
      * 鼠标移动事件处理
      */
     private onMouseMove(e: MouseEvent) {
+        console.log("onMouseMove")
         const pos = this.getMousePos(e);
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
@@ -248,39 +241,42 @@ export class InteractionManager {
 
         // 1. 处理框选 (实时预览)
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
+            const b0 = performance.now();
             vec2.copy(this.auxLayer.selectionRect.end, pos);
             this.lastMousePos = pos;
-            
+
             // 实时更新选中状态 (Optional: 如果性能允许)
-            // 这里使用 QuadTree 加速，所以可以实时高亮！
             const start = this.auxLayer.selectionRect.start;
             const end = this.auxLayer.selectionRect.end;
             const minX = Math.min(start[0], end[0]);
             const minY = Math.min(start[1], end[1]);
             const maxX = Math.max(start[0], end[0]);
             const maxY = Math.max(start[1], end[1]);
-            
+
             this.auxLayer.selectedNodes.clear();
             this.boxSelect(minX, minY, maxX, maxY);
-            
+            this.renderer.stats.times.boxSelect = performance.now() - b0;
+
             this.scene.invalidate();
             return;
         }
 
         // 2. 处理悬停高亮 (仅在未拖拽/平移/框选时)
         if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
+            const h0 = performance.now();
             const hit = this.hitTest(this.scene, pos);
+            this.renderer.stats.times.hitTest = performance.now() - h0;
             if (this.auxLayer.hoveredNode !== hit) {
                 // 优化：仅重绘变脏的区域 (旧高亮节点 + 新高亮节点)
                 const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
-                
+
                 this.auxLayer.hoveredNode = hit;
-                
+
                 const newBounds = this.getNodeScreenBounds(hit);
 
                 if (this.onHoverChange) this.onHoverChange();
                 this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
-                
+
                 // 提交脏矩形 (扩大范围以包含高亮边框)
                 const padding = 4;
                 if (oldBounds) {
@@ -297,7 +293,7 @@ export class InteractionManager {
                     newBounds.height += padding * 2;
                     this.engine.invalidateAuxArea(newBounds);
                 }
-                
+
                 // 如果没有脏矩形 (例如从空白移到空白)，无需重绘
                 // 但 onHoverChange 可能会更新 OutlineView
                 // OutlineView.updateHighlight() 仅改变 DOM 样式，不需要 WebGL 重绘
@@ -306,7 +302,7 @@ export class InteractionManager {
                 // 注意：invalidateArea 内部会调用 requestRender，所以这里不需要 needsRender = true
                 // 除非我们fallback到全屏渲染
                 if (!oldBounds && !newBounds) {
-                   // 无变化？不，hit 可能变了 (null -> null?)
+                    // 无变化？不，hit 可能变了 (null -> null?)
                 }
             }
         }
@@ -400,62 +396,36 @@ export class InteractionManager {
     }
 
     /**
-     * 使用 QuadTree 加速的框选逻辑
+     * 框选逻辑
      * @param minX 框选区域最小X (屏幕)
      * @param minY 框选区域最小Y (屏幕)
      * @param maxX 框选区域最大X (屏幕)
      * @param maxY 框选区域最大Y (屏幕)
      */
     private boxSelect(minX: number, minY: number, maxX: number, maxY: number) {
-        if (!this.quadTree) return;
-
         const selectionRect: Rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-        const candidates: Node[] = [];
-        
-        // 1. 从 QuadTree 获取潜在相交的节点 (Broad Phase)
-        this.quadTree.retrieve(candidates, selectionRect);
+        this._recursiveBoxSelect(this.scene, selectionRect);
+    }
 
-        // 2. 精确检测 (Narrow Phase)
-        for (const node of candidates) {
-            // 不选择场景根节点
-            if (node === this.scene) continue;
-
-            // 优先使用 World AABB (如果存在)
-            let nodeMinX, nodeMinY, nodeMaxX, nodeMaxY;
-
-            if (node.worldMinX !== Infinity) {
-                nodeMinX = node.worldMinX;
-                nodeMinY = node.worldMinY;
-                nodeMaxX = node.worldMaxX;
-                nodeMaxY = node.worldMaxY;
-            } else {
-                // 计算节点在屏幕空间的 AABB
-                const corners = [
-                    vec2.fromValues(0, 0),
-                    vec2.fromValues(node.width, 0),
-                    vec2.fromValues(node.width, node.height),
-                    vec2.fromValues(0, node.height)
-                ];
-
-                nodeMinX = Infinity; nodeMinY = Infinity; nodeMaxX = -Infinity; nodeMaxY = -Infinity;
-
-                for (const p of corners) {
-                    const screen = vec2.create();
-                    vec2.transformMat3(screen, p, node.transform.worldMatrix);
-                    nodeMinX = Math.min(nodeMinX, screen[0]);
-                    nodeMinY = Math.min(nodeMinY, screen[1]);
-                    nodeMaxX = Math.max(nodeMaxX, screen[0]);
-                    nodeMaxY = Math.max(nodeMaxY, screen[1]);
-                }
+    private _recursiveBoxSelect(node: Node, selectionRect: Rect) {
+        // 1. 常规 AABB 剔除
+        if (node.worldMinX !== Infinity) {
+            if (selectionRect.x > node.worldMaxX || selectionRect.x + selectionRect.width < node.worldMinX ||
+                selectionRect.y > node.worldMaxY || selectionRect.y + selectionRect.height < node.worldMinY) {
+                return;
             }
+        }
 
-            // AABB 相交检测
-            const overlaps = (minX < nodeMaxX && maxX > nodeMinX &&
-                minY < nodeMaxY && maxY > nodeMinY);
+        // 2. 检测自身是否被选中
+        if (node.interactive && node !== this.scene) {
+            // 这里已经通过了 AABB 粗筛，可以进行更精确的检测 (可选)
+            // 简单起见，如果 AABB 相交就认为选中
+            this.auxLayer.selectedNodes.add(node);
+        }
 
-            if (overlaps) {
-                this.auxLayer.selectedNodes.add(node);
-            }
+        // 3. 递归子节点
+        for (const child of node.children) {
+            this._recursiveBoxSelect(child, selectionRect);
         }
     }
 
@@ -481,10 +451,7 @@ export class InteractionManager {
             // 重置状态
             this.isBoxSelecting = false;
             this.auxLayer.selectionRect = null;
-            
-            // 关键优化：释放庞大的 QuadTree 索引，它仅在框选拖拽过程中需要
-            this.quadTree = null;
-            
+
             this.scene.invalidate(); // 重绘以清除框选框并显示选中状态
             return;
         }
@@ -551,6 +518,7 @@ export class InteractionManager {
      * 3. 触控板双指滑动 -> 平移 (deltaMode = 0)
      */
     private onWheel(e: WheelEvent) {
+        console.log("onWheel")
         e.preventDefault();
 
         // 判定是否为缩放操作
@@ -558,6 +526,9 @@ export class InteractionManager {
         // 2. DeltaMode 为 LINE (1) 或 PAGE (2) (通常是鼠标滚轮)
         // 注意：某些鼠标驱动可能在 pixel 模式下发送数据，这里主要区分触控板滑动
         const isZoom = e.ctrlKey || e.deltaMode !== 0;
+
+        // 只有当值确实发生变化时才进行操作
+        const t0 = performance.now();
 
         if (isZoom) {
             // --- 缩放逻辑 ---
@@ -582,19 +553,25 @@ export class InteractionManager {
             const newTransX = mouseX - (mouseX - transX) * scaleChange;
             const newTransY = mouseY - (mouseY - transY) * scaleChange;
 
-            this.scene.scaleX = newScale;
-            this.scene.scaleY = newScale;
-            this.scene.x = newTransX;
-            this.scene.y = newTransY;
+            // 4. 更新场景变换 (一次性设置，减少计算)
+            this.scene.setTransform(newTransX, newTransY, newScale, newScale);
         } else {
             // --- 平移逻辑 (触控板双指滑动) ---
             // 反向：手指向上推(deltaY > 0)，内容应该向上跑(y 减小)？
             // 浏览器标准：deltaY > 0 表示向下滚动。
             // 在地图中，向下滚动 = 视口向下 = 内容向上。
             // 所以 scene.y -= deltaY
-            
-            this.scene.x -= e.deltaX;
-            this.scene.y -= e.deltaY;
+
+            this.scene.setTransform(
+                this.scene.x - e.deltaX,
+                this.scene.y - e.deltaY,
+                this.scene.scaleX,
+                this.scene.scaleY
+            );
+        }
+
+        if (Renderer.instance) {
+            Renderer.instance.stats.times.nodeTransform = (performance.now() - t0);
         }
     }
 }

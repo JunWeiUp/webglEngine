@@ -1,4 +1,3 @@
-import { defaultFragmentShader, defaultVertexShader } from './shaders';
 import { Node } from '../display/Node';
 import { mat3 } from 'gl-matrix';
 import type { Rect } from './Rect';
@@ -10,31 +9,47 @@ import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
  */
 export class Renderer {
     public gl: WebGL2RenderingContext;
+    public static instance: Renderer | null = null;
     public ctx: CanvasRenderingContext2D;
     public width: number;
     public height: number;
-    
+
     private shaderProgram: WebGLProgram | null = null;
-    
+
     // 批处理渲染状态
     private static readonly MAX_QUADS = 10000; // 最大批处理 Quad 数量
     private maxTextures: number = 8;  // 最大纹理单元数量 (动态获取)
     private static readonly VERTEX_SIZE = 9;   // 顶点数据大小: x, y, u, v, r, g, b, a, texIndex
-    
+
     private vertexBufferData: Float32Array; // 顶点数据缓冲区（CPU）
     private currentQuadCount: number = 0;   // 当前已填充的 Quad 数量
     private textureSlots: WebGLTexture[] = []; // 当前批次使用的纹理槽
-    
+
     // 性能统计
     public stats = {
         drawCalls: 0,
         quadCount: 0,
-        times: {
+        frameCount: 0,
+        lastFPS: 0,
+        smoothTimes: {
             transform: 0,
-            spatialQuery: 0,
             renderWebGL: 0,
             flush: 0,
+            logic: 0,
+            hitTest: 0,   // 新增：拾取检测耗时
+            boxSelect: 0, // 新增：框选耗时
+            nodeTransform: 0, // 新增：节点变换更新耗时
+            total: 0
+        },
+        times: {
+            transform: 0,
+            renderWebGL: 0,
             canvas2D: 0,
+            flush: 0,
+            logic: 0,
+            hitTest: 0,   // 新增：拾取检测耗时
+            boxSelect: 0, // 新增：框选耗时
+            nodeTransform: 0, // 新增：节点变换更新耗时
             total: 0
         }
     };
@@ -46,17 +61,11 @@ export class Renderer {
     private indexBuffer: WebGLBuffer | null = null;         // 静态索引缓冲区（GPU）
 
     private projectionMatrix: mat3 = mat3.create();
-    
-    // 缓存状态，用于跳过重复计算
-    private lastSceneVersion: number = -1;
-    private lastViewX: number = -1;
-    private lastViewY: number = -1;
-    private lastViewW: number = -1;
-    private lastViewH: number = -1;
-    private cachedVisibleNodes: Node[] = [];
 
     /** 当前帧序号 */
-    public frameCount: number = 0;
+    private _frameCount: number = 0;
+    /** FPS 统计上次更新时间 */
+    private lastFPSUpdateTime: number = 0;
     /** 当前帧全局时间戳 (ms) */
     public static currentTime: number = 0;
 
@@ -65,11 +74,12 @@ export class Renderer {
      * @param container 承载 Canvas 的 DOM 容器
      */
     constructor(container: HTMLElement) {
+        Renderer.instance = this;
         // 初始化批处理数据
         this.vertexBufferData = new Float32Array(Renderer.MAX_QUADS * 4 * Renderer.VERTEX_SIZE);
         MemoryTracker.getInstance().track(
-            MemoryCategory.CPU_TYPED_ARRAY, 
-            'Renderer_vertexBufferData', 
+            MemoryCategory.CPU_TYPED_ARRAY,
+            'Renderer_vertexBufferData',
             this.vertexBufferData.byteLength,
             'Renderer Vertex Buffer (CPU)'
         );
@@ -104,6 +114,7 @@ export class Renderer {
 
         this.resize(this.width, this.height);
         this.initWebGL();
+        this.lastFPSUpdateTime = performance.now();
     }
 
     /**
@@ -114,7 +125,7 @@ export class Renderer {
     resize(w: number, h: number) {
         this.width = w;
         this.height = h;
-        
+
         this.gl.canvas.width = w;
         this.gl.canvas.height = h;
         this.ctx.canvas.width = w;
@@ -126,7 +137,7 @@ export class Renderer {
         // 2/w, 0, 0
         // 0, -2/h, 0
         // -1, 1, 1
-        mat3.set(this.projectionMatrix, 
+        mat3.set(this.projectionMatrix,
             2 / w, 0, 0,
             0, -2 / h, 0,
             -1, 1, 1
@@ -134,14 +145,14 @@ export class Renderer {
 
         // 追踪 Canvas 内存
         MemoryTracker.getInstance().track(
-            MemoryCategory.CPU_CANVAS, 
-            'Renderer_WebGL_Canvas', 
+            MemoryCategory.CPU_CANVAS,
+            'Renderer_WebGL_Canvas',
             w * h * 4,
             'Renderer WebGL Canvas'
         );
         MemoryTracker.getInstance().track(
-            MemoryCategory.CPU_CANVAS, 
-            'Renderer_2D_Canvas', 
+            MemoryCategory.CPU_CANVAS,
+            'Renderer_2D_Canvas',
             w * h * 4,
             'Renderer 2D Canvas'
         );
@@ -152,7 +163,7 @@ export class Renderer {
      */
     private initWebGL() {
         const gl = this.gl;
-        
+
         // 1. 获取硬件支持的最大纹理单元数
         const maxUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
         this.maxTextures = Math.min(maxUnits, 16); // 限制到 16，避免 shader 编译过慢或超出某些限制
@@ -196,7 +207,7 @@ void main() {
         // 编译着色器
         const vs = this.createShader(gl, gl.VERTEX_SHADER, vsSource);
         const fs = this.createShader(gl, gl.FRAGMENT_SHADER, fsSource);
-        
+
         this.shaderProgram = this.createProgram(gl, vs, fs);
         gl.useProgram(this.shaderProgram);
 
@@ -235,7 +246,7 @@ void main() {
             indices.byteLength,
             'Renderer Index Buffer (GPU)'
         );
-        
+
         // 设置顶点属性布局
         this.bindAttributes();
     }
@@ -326,32 +337,30 @@ void main() {
      * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
      */
     public render(scene: Node, dirtyRect?: Rect) {
-        // 性能核心：如果场景没有脏，且没有提供脏矩形（全屏重绘请求），
-        // 且视口也没有变化，理论上可以完全跳过。
-        // 但为了安全，我们至少要检查一次 subtreeDirty。
-        
-        if (!scene.subtreeDirty && !scene.transform.dirty && !dirtyRect && this.cachedVisibleNodes.length > 0) {
-            // 检查视口是否变化
-            const viewX = 0; // 简化处理
-            const viewY = 0;
-            if (this.lastViewX === viewX && this.lastViewY === viewY) {
-                return; 
-            }
-        }
-
         const startTime = performance.now();
         Renderer.currentTime = startTime; // 更新全局时间
-        
+
+        // 计算 FPS (每秒更新一次)
+        this.stats.frameCount++;
+        if (startTime - this.lastFPSUpdateTime >= 1000) {
+            const elapsed = startTime - this.lastFPSUpdateTime;
+            this.stats.lastFPS = Math.round((this.stats.frameCount * 1000) / elapsed);
+            this.stats.frameCount = 0;
+            this.lastFPSUpdateTime = startTime;
+        }
+
         // 递增帧序号
-        this.frameCount++;
+        this._frameCount++;
 
         // 重置统计
+        this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
+        this.stats.times.nodeTransform = 0;
 
         // 1. 设置 WebGL Scissor Test (裁剪测试)
         if (dirtyRect) {
             this.gl.enable(this.gl.SCISSOR_TEST);
-            
+
             // 计算 dirtyRect 的边界 (屏幕坐标)
             const left = Math.floor(dirtyRect.x);
             const top = Math.floor(dirtyRect.y);
@@ -364,7 +373,7 @@ void main() {
             const height = bottom - top;
             const scissorX = left;
             const scissorY = this.height - bottom;
-            
+
             // 限制在画布范围内
             const x = Math.max(0, scissorX);
             const y = Math.max(0, scissorY);
@@ -386,111 +395,21 @@ void main() {
         scene.updateTransform(null, false); // 根节点使用脏标记按需更新
         this.stats.times.transform = performance.now() - t0;
 
-        // 3. 决定渲染策略：如果有空间索引则使用索引查询，否则使用递归遍历
-        if (scene.spatialIndex) {
-            this.renderSceneWithSpatialIndex(scene, dirtyRect);
-        } else {
-            const r0 = performance.now();
-            // 优化点：如果节点过多，renderNodeWebGL 会非常卡。
-            // 这里的递归是性能杀手。我们已经引入了子树裁剪，
-            // 但对于 10万+ 节点，递归本身的开销依然存在。
-            this.renderNodeWebGL(scene, dirtyRect);
-            this.stats.times.renderWebGL = performance.now() - r0;
-            this.stats.times.spatialQuery = 0;
-        }
-        
+        // 3. 递归遍历渲染
+        const r0 = performance.now();
+        // 优化点：如果节点过多，renderNodeWebGL 会非常卡。
+        // 这里的递归是性能杀手。我们已经引入了子树裁剪，
+        // 但对于 10万+ 节点，递归本身的开销依然存在。
+        this.renderNodeWebGL(scene, dirtyRect);
+        this.stats.times.renderWebGL = performance.now() - r0;
+
         // 渲染结束，强制刷新剩余的批次
         const f0 = performance.now();
         this.flush();
         this.stats.times.flush = performance.now() - f0;
 
         this.stats.times.total = performance.now() - startTime;
-    }
-
-    /**
-     * 使用空间索引优化渲染流程
-     */
-    private renderSceneWithSpatialIndex(scene: Node, cullingRect?: Rect) {
-        const q0 = performance.now();
-        // 1. 确定查询范围 (场景空间)
-        const viewX = cullingRect ? cullingRect.x : 0;
-        const viewY = cullingRect ? cullingRect.y : 0;
-        const viewW = cullingRect ? cullingRect.width : this.width;
-        const viewH = cullingRect ? cullingRect.height : this.height;
-
-        // 检查缓存：如果场景没变且视口没变，直接使用缓存的节点
-        const viewChanged = viewX !== this.lastViewX || viewY !== this.lastViewY || viewW !== this.lastViewW || viewH !== this.lastViewH;
-        const sceneChanged = scene.subtreeDirty || scene.transform.dirty;
-
-        if (!viewChanged && !sceneChanged && this.cachedVisibleNodes.length > 0) {
-            this.stats.times.spatialQuery = 0;
-            const r0 = performance.now();
-            const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
-            for (const node of this.cachedVisibleNodes) {
-                if (currentScale >= node.minVisibleScale && currentScale <= node.maxVisibleScale) {
-                    if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                        (node as any).renderWebGL(this, cullingRect);
-                    }
-                }
-            }
-            this.stats.times.renderWebGL = performance.now() - r0;
-            return;
-        }
-
-        // 更新缓存参数
-        this.lastViewX = viewX; this.lastViewY = viewY; this.lastViewW = viewW; this.lastViewH = viewH;
-
-        // 将屏幕坐标转换为场景局部坐标 (考虑视口变换)
-        const invScene = mat3.create();
-        mat3.invert(invScene, scene.transform.worldMatrix);
-
-        const corners = [
-            [viewX, viewY],
-            [viewX + viewW, viewY],
-            [viewX + viewW, viewY + viewH],
-            [viewX, viewY + viewH]
-        ];
-
-        let sMinX = Infinity, sMinY = Infinity, sMaxX = -Infinity, sMaxY = -Infinity;
-        for (const p of corners) {
-            const lp = [0, 0];
-            lp[0] = p[0] * invScene[0] + p[1] * invScene[3] + invScene[6];
-            lp[1] = p[0] * invScene[1] + p[1] * invScene[4] + invScene[7];
-            
-            if (lp[0] < sMinX) sMinX = lp[0];
-            if (lp[0] > sMaxX) sMaxX = lp[0];
-            if (lp[1] < sMinY) sMinY = lp[1];
-            if (lp[1] > sMaxY) sMaxY = lp[1];
-        }
-
-        const queryRect: Rect = { x: sMinX, y: sMinY, width: sMaxX - sMinX, height: sMaxY - sMinY };
-
-        // 2. 查询空间索引
-        this.cachedVisibleNodes.length = 0;
-        scene.spatialIndex.retrieve(this.cachedVisibleNodes, queryRect);
-        this.stats.times.spatialQuery = performance.now() - q0;
-
-        const r0 = performance.now();
-        // 3. 计算当前缩放级别 (用于 LOD)
-        const currentScale = Math.hypot(scene.transform.worldMatrix[0], scene.transform.worldMatrix[1]);
-
-        // 4. 渲染可见节点
-        for (const node of this.cachedVisibleNodes) {
-            // LOD 检查
-            if (currentScale < node.minVisibleScale || currentScale > node.maxVisibleScale) {
-                continue;
-            }
-
-            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                (node as any).renderWebGL(this, cullingRect);
-            }
-        }
-
-        // 如果开启了调试模式，绘制四叉树
-        if (scene.spatialIndex.debug) {
-            scene.spatialIndex.drawDebug(this.ctx, scene.transform.worldMatrix);
-        }
-        this.stats.times.renderWebGL = performance.now() - r0;
+        this.updateSmoothStats();
     }
 
     /**
@@ -519,7 +438,7 @@ void main() {
      */
     private renderNodeWebGL(root: Node, cullingRect?: Rect) {
         const stack: Node[] = [root];
-        
+
         const viewX = cullingRect ? cullingRect.x : 0;
         const viewY = cullingRect ? cullingRect.y : 0;
         const viewW = cullingRect ? cullingRect.width : this.width;
@@ -529,10 +448,10 @@ void main() {
 
         while (stack.length > 0) {
             const node = stack.pop()!;
-            
+
             // 1. 快速剔除 (极速 AABB 判断)
             if (node.worldMinX !== Infinity) {
-                if (node.worldMaxX < viewX || node.worldMinX > viewRight || 
+                if (node.worldMaxX < viewX || node.worldMinX > viewRight ||
                     node.worldMaxY < viewY || node.worldMinY > viewBottom) {
                     continue; // 子树裁剪
                 }
@@ -562,8 +481,8 @@ void main() {
         }
 
         if (isVisible) {
-             // 调用节点的 Canvas 渲染方法（如果存在）
-             if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
+            // 调用节点的 Canvas 渲染方法（如果存在）
+            if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
                 (node as any).renderCanvas(this);
             }
         }
@@ -587,10 +506,10 @@ void main() {
         const viewH = cullingRect ? cullingRect.height : this.height;
 
         // 高效的 AABB 相交检测
-        return !(node.worldMaxX < viewX || 
-                 node.worldMinX > viewX + viewW || 
-                 node.worldMaxY < viewY || 
-                 node.worldMinY > viewY + viewH);
+        return !(node.worldMaxX < viewX ||
+            node.worldMinX > viewX + viewW ||
+            node.worldMaxY < viewY ||
+            node.worldMinY > viewY + viewH);
     }
 
     // 废弃的辅助方法 (为了兼容旧接口暂时保留)
@@ -604,6 +523,24 @@ void main() {
 
     public getProgram() {
         return this.shaderProgram!;
+    }
+
+    /**
+     * 更新平滑性能统计数据
+     * @param alpha 平滑系数
+     */
+    public updateSmoothStats(alpha: number = 0.05) {
+        const st = this.stats.smoothTimes;
+        const t = this.stats.times;
+
+        st.transform = st.transform * (1 - alpha) + t.transform * alpha;
+        st.renderWebGL = st.renderWebGL * (1 - alpha) + t.renderWebGL * alpha;
+        st.flush = st.flush * (1 - alpha) + t.flush * alpha;
+        st.logic = st.logic * (1 - alpha) + t.logic * alpha;
+        st.hitTest = st.hitTest * (1 - alpha) + t.hitTest * alpha;
+        st.boxSelect = st.boxSelect * (1 - alpha) + t.boxSelect * alpha;
+        st.nodeTransform = st.nodeTransform * (1 - alpha) + t.nodeTransform * alpha;
+        st.total = st.total * (1 - alpha) + t.total * alpha;
     }
 
     /**
@@ -633,11 +570,11 @@ void main() {
             gl.activeTexture(gl.TEXTURE0 + i);
             gl.bindTexture(gl.TEXTURE_2D, this.textureSlots[i]);
         }
-        
+
         // 设置 u_textures uniform 数组
         const uTexturesLocation = gl.getUniformLocation(program, "u_textures");
         if (uTexturesLocation) {
-             gl.uniform1iv(uTexturesLocation, this.textureIndices);
+            gl.uniform1iv(uTexturesLocation, this.textureIndices);
         }
 
         // 设置投影矩阵
@@ -667,17 +604,17 @@ void main() {
      * @param color 颜色数组 (Float32Array, 建议缓存复用)
      */
     public drawQuadFast(
-        texture: WebGLTexture, 
-        x0: number, y0: number, 
-        x1: number, y1: number, 
-        x2: number, y2: number, 
-        x3: number, y3: number, 
-        uvs: Float32Array, 
+        texture: WebGLTexture,
+        x0: number, y0: number,
+        x1: number, y1: number,
+        x2: number, y2: number,
+        x3: number, y3: number,
+        uvs: Float32Array,
         color: Float32Array
     ) {
         // 查找或添加纹理到槽位
         let textureIndex = this.textureSlots.indexOf(texture);
-        
+
         if (textureIndex === -1) {
             if (this.textureSlots.length >= this.maxTextures) {
                 this.flush();
@@ -734,7 +671,7 @@ void main() {
     public drawQuad(texture: WebGLTexture, vertices: Float32Array, uvs: Float32Array, color: Float32Array) {
         // 查找或添加纹理到槽位
         let textureIndex = this.textureSlots.indexOf(texture);
-        
+
         if (textureIndex === -1) {
             // 如果纹理槽已满，先 Flush
             if (this.textureSlots.length >= this.maxTextures) {
@@ -762,15 +699,15 @@ void main() {
         // 4 个顶点
         for (let i = 0; i < 4; i++) {
             const idx = offset + i * Renderer.VERTEX_SIZE;
-            
+
             // Pos (x, y)
             data[idx + 0] = vertices[i * 2 + 0];
             data[idx + 1] = vertices[i * 2 + 1];
-            
+
             // UV (u, v)
             data[idx + 2] = uvs[i * 2 + 0];
             data[idx + 3] = uvs[i * 2 + 1];
-            
+
             // Color (r, g, b, a)
             data[idx + 4] = color[0];
             data[idx + 5] = color[1];

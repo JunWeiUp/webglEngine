@@ -65,6 +65,27 @@ export class Transform {
         }
     }
 
+    setTransform(x: number, y: number, scaleX: number, scaleY: number, rotation?: number) {
+        let changed = false;
+        if (this.x !== x || this.y !== y) {
+            this.x = x;
+            this.y = y;
+            changed = true;
+        }
+        if (this.scaleX !== scaleX || this.scaleY !== scaleY) {
+            this.scaleX = scaleX;
+            this.scaleY = scaleY;
+            changed = true;
+        }
+        if (rotation !== undefined && this.rotation !== rotation) {
+            this.rotation = rotation;
+            changed = true;
+        }
+        if (changed) {
+            this.dirty = true;
+        }
+    }
+
     setRotation(rad: number) {
         if (this.rotation !== rad) {
             this.rotation = rad;

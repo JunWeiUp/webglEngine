@@ -181,7 +181,7 @@ export class OutlineView {
         this.pendingRender = true;
         
         requestAnimationFrame(() => {
-            console.log("outlineview requestAnimationFrame")
+            // console.log("outlineview requestAnimationFrame")
             this.pendingRender = false;
             this.doRenderVisibleItems();
         });

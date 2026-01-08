@@ -3,8 +3,10 @@ import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
-import { PerfMonitor } from './utils/perf_monitor';
+import { PerfHUD } from './ui/PerfHUD';
 import type { Rect } from './core/Rect';
+import { AtlasManager } from './utils/AtlasManager';
+import { TextureManager } from './utils/TextureManager';
 
 /**
  * 引擎入口类
@@ -24,6 +26,7 @@ export class Engine {
     public interaction: InteractionManager;
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
+    public perfHUD: PerfHUD;
     public alwaysRender: boolean = false;
 
     // 渲染请求 ID (防抖动)
@@ -33,6 +36,8 @@ export class Engine {
     private dirtyRect: Rect | null = null;
     private fullInvalidate: boolean = true; // 默认第一帧全屏渲染
     private sceneDirty: boolean = true; // WebGL 场景是否变脏
+
+    private _resizeHandler: () => void;
 
     /**
      * 构造函数
@@ -81,19 +86,43 @@ export class Engine {
         };
 
         // 自动处理窗口大小调整
-        const resize = () => {
+        this._resizeHandler = () => {
             this.renderer.resize(container.clientWidth, container.clientHeight);
             this.requestRender(); // 尺寸变化触发渲染
         };
-        window.addEventListener('resize', resize);
+        window.addEventListener('resize', this._resizeHandler);
         // 初始调用一次以设置正确尺寸
-        resize();
+        this._resizeHandler();
 
         // 初始渲染
         this.requestRender();
 
-        let perfMonitor = new PerfMonitor();
-        perfMonitor.start(container);
+        // 初始化性能监控面板
+        this.perfHUD = new PerfHUD(container, this.renderer);
+    }
+
+    /**
+     * 彻底销毁引擎，释放所有资源
+     */
+    public dispose() {
+        if (this._rafId !== null) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
+        }
+
+        window.removeEventListener('resize', this._resizeHandler);
+
+        // 销毁场景 (会触发所有节点的 dispose)
+        this.scene.dispose();
+
+        // 销毁全局管理器
+        AtlasManager.getInstance().dispose();
+        
+        // 注意：TextureManager 是静态类，目前通过场景节点的 dispose 间接清理了它引用的纹理
+        // 如果需要彻底清理 TextureManager 缓存，可以添加一个清理方法
+        
+        // 销毁交互管理器
+        this.interaction.dispose();
     }
 
     /**
@@ -162,7 +191,7 @@ export class Engine {
     public requestRender() {
         if (this._rafId === null) {
             this._rafId = requestAnimationFrame(() => {
-                console.log("engine requestAnimationFrame")
+                // console.log("engine requestAnimationFrame")
 
                 this.loop();
                 if (this.alwaysRender) {
@@ -179,6 +208,8 @@ export class Engine {
      * 单帧渲染逻辑
      */
     private loop() {
+        const l0 = performance.now();
+
         // 确定渲染区域
         const drawWebGL = this.sceneDirty || this.fullInvalidate;
         const drawAux = this.dirtyRect !== null || this.fullInvalidate;
@@ -190,6 +221,9 @@ export class Engine {
         }
 
         const renderRect = this.fullInvalidate ? undefined : (this.dirtyRect || undefined);
+
+        // 记录逻辑处理耗时
+        this.renderer.stats.times.logic = performance.now() - l0;
 
         // 1. WebGL Pass
         if (drawWebGL) {

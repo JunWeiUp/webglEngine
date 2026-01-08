@@ -1,11 +1,12 @@
 import { Node } from './Node';
 import type { IRenderer } from '../core/IRenderer';
+import { Renderer } from '../core/Renderer';
 import type { Rect } from '../core/Rect';
 import { TextureManager } from '../utils/TextureManager';
 import { mat3, vec2 } from 'gl-matrix';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
-export type TileSource = string | HTMLCanvasElement | Promise<HTMLCanvasElement>;
+export type TileSource = string | HTMLCanvasElement | Promise<HTMLCanvasElement> | { source: string | HTMLCanvasElement, key: string };
 
 /**
  * TileLayer (瓦片图层) 类
@@ -27,6 +28,8 @@ export class TileLayer extends Node {
     private tileTextures: Map<string, { texture: WebGLTexture, lastUsedTime: number, url?: string }> = new Map();
     // 正在加载的集合 (支持取消)
     private loading: Map<string, AbortController> = new Map();
+    // 缓存 GL 上下文，用于销毁
+    private _gl: WebGL2RenderingContext | null = null;
 
     // --- 共享渲染数据 (GC 优化) ---
     private static sharedColor: Float32Array = (() => {
@@ -51,8 +54,8 @@ export class TileLayer extends Node {
     })();
 
     // LRU 配置
-    private static MAX_TILES = 1000; // 从 20000 下调至 1000 (约 256MB 显存)
-    private static GC_INTERVAL = 30; // 缩短 GC 间隔
+    private static MAX_TILES = 400; // 进一步下调至 400 (约 100MB 显存)
+    private static GC_INTERVAL = 15; // 进一步缩短 GC 间隔
     private gcFrameCount = 0;
 
     constructor(tileSize: number, tileSourceProvider: (x: number, y: number, z: number) => TileSource, baseZoom: number = 12) {
@@ -117,6 +120,7 @@ export class TileLayer extends Node {
 
         // 3. 渲染瓦片
         const gl = renderer.gl;
+        this._gl = gl; // 缓存 GL 上下文
         const visibleKeys = new Set<string>();
 
         // 范围限制安全检查 (现在不太可能触发)
@@ -139,16 +143,16 @@ export class TileLayer extends Node {
                         
                         const source = this.tileSourceProvider(x, y, effectiveZoom);
 
-                        const handleTexture = (tex: WebGLTexture, url?: string) => {
+                        const handleTexture = (tex: WebGLTexture, urlOrKey?: string) => {
                             if (this.loading.has(key)) { // 检查是否已被取消
                                 this.tileTextures.set(key, { 
                                     texture: tex, 
                                     lastUsedTime: performance.now(),
-                                    url: url 
+                                    url: urlOrKey 
                                 });
 
-                                // 追踪动态生成的纹理内存 (URL 加载的已在 TextureManager 中追踪)
-                                if (!url) {
+                                // 如果没有 urlOrKey，说明是未经过 TextureManager 缓存的原始 WebGLTexture
+                                if (!urlOrKey) {
                                     MemoryTracker.getInstance().track(
                                         MemoryCategory.GPU_TEXTURE,
                                         `Tile_${key}`,
@@ -160,13 +164,15 @@ export class TileLayer extends Node {
                                 this.loading.delete(key);
                                 this.invalidate(); // 瓦片加载完成，请求重绘
                             } else {
-                                // 已经被取消但加载完成了
-                                if (!url) {
-                                    // 如果是动态生成的纹理，需要手动释放
+                                // 已经被取消但加载完成了，必须释放资源
+                                if (urlOrKey) {
+                                    // 使用了缓存标识，通知 TextureManager 释放
+                                    TextureManager.disposeTexture(gl, urlOrKey);
+                                } else {
+                                    // 原始纹理，直接删除
                                     gl.deleteTexture(tex);
                                     MemoryTracker.getInstance().untrack(`Tile_${key}`);
                                 }
-                                // 如果是 URL 纹理，TextureManager 会处理（或者已经在 LRU 中被处理）
                             }
                         };
 
@@ -189,18 +195,29 @@ export class TileLayer extends Node {
                                 this.loading.delete(key);
                             }
                         } else if (source instanceof Promise) {
-                            // Promise<HTMLCanvasElement> 模式
-                            source.then(canvas => {
+                            // Promise 模式
+                            source.then(result => {
                                 if (controller.signal.aborted) return;
-                                const tex = TextureManager.createTextureFromSource(gl, canvas);
-                                if (tex) {
-                                    handleTexture(tex);
-                                } else {
-                                    this.loading.delete(key);
+                                
+                                if (result instanceof HTMLCanvasElement || (result as any).tagName === 'CANVAS') {
+                                    const tex = TextureManager.createTextureFromSource(gl, result as HTMLCanvasElement);
+                                    if (tex) handleTexture(tex);
+                                    else this.loading.delete(key);
                                 }
                             }).catch(() => {
                                 this.loading.delete(key);
                             });
+                        } else if (typeof source === 'object' && 'source' in source && 'key' in (source as any)) {
+                            // 带 Key 的复用模式
+                            const s = source as { source: string | HTMLCanvasElement, key: string };
+                            if (typeof s.source === 'string') {
+                                TextureManager.loadTexture(gl, s.source, controller.signal)
+                                    .then(t => handleTexture(t.baseTexture, s.key)) // 注意：这里使用 s.key 作为缓存标识
+                                    .catch(() => this.loading.delete(key));
+                            } else {
+                                const tex = TextureManager.getOrCreateTexture(gl, s.key, s.source);
+                                handleTexture(tex.baseTexture, s.key);
+                            }
                         }
                     }
                     continue;
@@ -282,7 +299,7 @@ export class TileLayer extends Node {
         entries.sort((a, b) => a[1].lastUsedTime - b[1].lastUsedTime);
 
         // 删除最旧的瓦片
-        const toRemoveCount = this.tileTextures.size - TileLayer.MAX_TILES + 20; // 每次多删一点，避免频繁 GC
+        const toRemoveCount = Math.max(20, this.tileTextures.size - TileLayer.MAX_TILES + 10); // 确保每次至少删除一些
         
         for (let i = 0; i < toRemoveCount && i < entries.length; i++) {
             const [key, info] = entries[i];
@@ -298,5 +315,34 @@ export class TileLayer extends Node {
             
             this.tileTextures.delete(key);
         }
+    }
+
+    /**
+     * 销毁图层，释放所有瓦片资源
+     */
+    dispose() {
+        // 1. 取消所有正在进行的加载
+        for (const controller of this.loading.values()) {
+            controller.abort();
+        }
+        this.loading.clear();
+
+        // 2. 释放所有已缓存的纹理
+        const gl = this._gl || (Renderer as any).instance?.gl;
+        
+        if (gl) {
+            for (const info of this.tileTextures.values()) {
+                if (info.url) {
+                    TextureManager.disposeTexture(gl, info.url);
+                } else {
+                    gl.deleteTexture(info.texture);
+                }
+            }
+        }
+        
+        this.tileTextures.clear();
+        MemoryTracker.getInstance().untrackByPrefix('Tile_');
+
+        super.dispose();
     }
 }

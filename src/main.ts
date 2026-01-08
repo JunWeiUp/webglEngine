@@ -82,7 +82,7 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalRows = 100; // 恢复为 100 行 (共 10000 个容器)
 const totalCols = 100;
 const batchSize = 5; // 每帧处理 5 行
 
@@ -303,20 +303,14 @@ function updateStats(time: number) {
         <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
         <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
         Transform: ${glStats.times.transform.toFixed(2)}<br>
-        Spatial Query: ${glStats.times.spatialQuery.toFixed(2)}<br>
         WebGL Render: ${glStats.times.renderWebGL.toFixed(2)}<br>
         Flush (GPU): ${glStats.times.flush.toFixed(2)}<br>
         Canvas 2D: ${glStats.times.canvas2D.toFixed(2)}<br>
+        Logic: ${glStats.times.logic.toFixed(2)}<br>
+        Hit Test: ${glStats.times.hitTest.toFixed(2)}<br>
+        Box Select: ${glStats.times.boxSelect.toFixed(2)}<br>
         <div style="color: #ffff00; margin-top: 2px;">Total: ${glStats.times.total.toFixed(2)}</div>
     `;
     requestAnimationFrame(updateStats);
 }
 requestAnimationFrame(updateStats);
-
-// Debug Toggle for QuadTree
-createButton("显示四叉树 (Debug)", () => {
-    if (engine.scene.spatialIndex) {
-        engine.scene.spatialIndex.debug = !engine.scene.spatialIndex.debug;
-        engine.scene.invalidate();
-    }
-});
