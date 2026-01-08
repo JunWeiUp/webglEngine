@@ -2,11 +2,14 @@ import { Renderer } from './core/Renderer';
 import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
+import { LayoutInspector } from './ui/LayoutInspector';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import { PerfHUD } from './ui/PerfHUD';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
 import { TextureManager } from './utils/TextureManager';
+
+import { LayoutManager } from './utils/LayoutManager';
 
 /**
  * 引擎入口类
@@ -17,6 +20,7 @@ import { TextureManager } from './utils/TextureManager';
  * - InteractionManager: 交互管理
  * - AuxiliaryLayer: 辅助图层 (UI/调试)
  * - OutlineView: 大纲视图 (调试 UI)
+ * - LayoutManager: Yoga 布局管理
  * 
  * 同时也负责主循环 (Loop)。
  */
@@ -25,6 +29,7 @@ export class Engine {
     public scene: Node;
     public interaction: InteractionManager;
     public outline: OutlineView;
+    public layoutInspector: LayoutInspector;
     public auxLayer: AuxiliaryLayer;
     public perfHUD: PerfHUD;
     public alwaysRender: boolean = false;
@@ -69,6 +74,9 @@ export class Engine {
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer);
 
+        // 初始化布局检查器
+        this.layoutInspector = new LayoutInspector(container, this.interaction);
+
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
@@ -78,6 +86,7 @@ export class Engine {
         // 监听选中/悬停变化，更新大纲视图高亮
         this.interaction.onSelectionChange = () => {
             this.outline.updateHighlight();
+            this.layoutInspector.update();
             this.requestRender();
         };
         this.interaction.onHoverChange = () => {
@@ -88,6 +97,12 @@ export class Engine {
         // 自动处理窗口大小调整
         this._resizeHandler = () => {
             this.renderer.resize(container.clientWidth, container.clientHeight);
+            
+            // 窗口缩放后，如果布局引擎已就绪，则重新计算布局
+            if (LayoutManager.getInstance().isInitialized) {
+                this.scene.calculateLayout(this.renderer.width, this.renderer.height);
+            }
+
             this.requestRender(); // 尺寸变化触发渲染
         };
         window.addEventListener('resize', this._resizeHandler);
@@ -99,6 +114,22 @@ export class Engine {
 
         // 初始化性能监控面板
         this.perfHUD = new PerfHUD(container, this.renderer);
+    }
+
+    /**
+     * 初始化引擎
+     */
+    public async init(): Promise<void> {
+        console.log('[Engine] Initializing...');
+        
+        // 初始化布局引擎 (异步)
+        await LayoutManager.getInstance().init();
+        
+        // 初始化完成后计算一次布局
+        this.scene.calculateLayout(this.renderer.width, this.renderer.height);
+        
+        this.invalidateFull();
+        console.log('[Engine] Initialization complete.');
     }
 
     /**

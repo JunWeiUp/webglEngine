@@ -17,6 +17,7 @@
     "@types/stats.js": "^0.17.4",
     "gl-matrix": "^3.4.4",
     "rbush": "^4.0.1",
-    "stats.js": "^0.17.0"
+    "stats.js": "^0.17.0",
+    "yoga-layout": "^3.2.1"
   }
 }

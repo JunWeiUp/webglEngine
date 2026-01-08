@@ -1,316 +1,161 @@
-import './style.css'
 import { Engine } from './engine/Engine';
-import { TileLayer } from './engine/display/TileLayer';
-import { Sprite } from './engine/display/Sprite';
-import { Text } from './engine/display/Text';
 import { Container } from './engine/display/Container';
-import { MemoryTracker } from './engine/utils/MemoryProfiler';
+import { Node } from './engine/display/Node';
+import { TileLayer } from './engine/display/TileLayer';
+import type { TileSource } from './engine/display/TileLayer';
+import { FlexDirection, Justify, Align, Wrap } from 'yoga-layout';
+import { TextureManager } from './engine/utils/TextureManager';
 
-const app = document.querySelector<HTMLDivElement>('#app')!
-app.style.width = '100vw';
-app.style.height = '100vh';
-app.style.overflow = 'hidden';
-app.style.margin = '0';
-app.style.padding = '0';
-document.body.style.margin = '0';
-
-const engine = new Engine(app);
-
-// Helper to generate debug images
-function createDebugImage(text: string, color: string, width: number = 256, height: number = 256): string {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, width, height);
-
-    // Border
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(0, 0, width, height);
-
-    ctx.fillStyle = '#000';
-    ctx.font = '20px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, width / 2, height / 2);
-
-    return canvas.toDataURL();
-}
-
-// 1. Add Tile Layer (Background) with generated tiles
-const tileLayer = new TileLayer(256, (x, y, z) => {
-    // Determine the offset for this zoom level
-    // At z=12, offset is 2048.
-    // At z=11, offset is 1024 (2048 / 2).
-    // offset = 2048 * 2^(z - 12)
-    const offset = Math.floor(2048 * Math.pow(2, z - 12));
-
-    // Check if tile coords are valid for this zoom level (0 to 2^z - 1)
-    const maxTile = Math.pow(2, z);
-    const tileX = offset + x;
-    const tileY = offset + y;
-
-    // In generated mode, we just draw numbers.
-    // In real map mode, we would wrap or return empty if out of bounds.
-
+// 模拟瓦片生成函数
+function createTileSource(x: number, y: number, z: number): TileSource {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
 
-    // Checkerboard pattern based on coords
-    const isEven = (tileX + tileY) % 2 === 0;
+    const isEven = (x + y) % 2 === 0;
     ctx.fillStyle = isEven ? '#e0e0e0' : '#ffffff';
     ctx.fillRect(0, 0, 256, 256);
 
     ctx.fillStyle = '#999';
     ctx.font = '24px monospace';
     ctx.fillText(`Z:${z}`, 20, 40);
-    ctx.fillText(`${tileX},${tileY}`, 20, 80);
-
-    // Grid line
+    ctx.fillText(`${x},${y}`, 20, 80);
     ctx.strokeStyle = '#ccc';
     ctx.strokeRect(0, 0, 256, 256);
 
     return canvas;
-}, 12);
-tileLayer.name = "MapLayer";
-engine.scene.addChild(tileLayer);
-const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
-const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
-// 2. Add a Container
-// 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 400; // 恢复为 100 行 (共 10000 个容器)
-const totalCols = 1000;
-const batchSize = 5; // 每帧处理 5 行
+}
 
-let currentRow = 0;
+// 红色矩形测试节点
+class TestRect extends Node {
+    public override renderWebGL(renderer: any) {
+        const gl = renderer.gl;
+        // 确保白色纹理已创建
+        TextureManager.createWhiteTexture(gl);
+        const whiteTex = TextureManager.getWhiteTexture();
+        if (!whiteTex) return;
 
-// 添加加载提示
-// const loadingText = new Text("Loading Scene... 0%");
-// loadingText.transform.position = [engine.renderer.width / 2 - 100, engine.renderer.height / 2];
-// loadingText.fontSize = 40;
-// loadingText.fillStyle = "blue";
-// loadingText.name = "LoadingText";
-// engine.scene.addChild(loadingText, true);
+        const vertices = new Float32Array([
+            0, 0,
+            200, 0,
+            200, 200,
+            0, 200
+        ]);
+        const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+        const color = new Float32Array([1, 0, 0, 1]); // 纯红色
 
-function loadBatch() {
-    const startRow = currentRow;
-    const endRow = Math.min(currentRow + batchSize, totalRows);
-
-    for (let i = startRow; i < endRow; i++) {
-        for (let j = 0; j < totalCols; j++) {
-            const container = new Container(engine.renderer.gl);
-            container.name = "MyContainer";
-            container.transform.setPosition(300 * i, 300 * j);
-            container.interactive = true;
-            container.width = 400;
-            container.height = 400;
-
-            container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
-            // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
-            engine.scene.addChild(container, true);
-
-            // 3. Add Sprites with generated images
-            const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
-            sprite1.transform.setPosition(50, 50);
-            sprite1.width = 100;
-            sprite1.height = 100;
-            sprite1.interactive = true;
-            sprite1.name = "Sprite1";
-            container.addChild(sprite1, true);
-
-            const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
-            sprite2.transform.setPosition(200, 50);
-            sprite2.width = 100;
-            sprite2.height = 100;
-            sprite2.interactive = true;
-            sprite2.name = "Sprite2";
-            container.addChild(sprite2, true);
-
-            // 4. Add Text (Canvas2D)
-            const text = new Text("Hello WebGL + Canvas!");
-            text.transform.setPosition(50, 200);
-            text.fontSize = 30;
-            text.fillStyle = "red";
-            text.interactive = true;
-            text.name = "HelloText";
-            container.addChild(text, true);
+        // 转换顶点到世界坐标
+        const m = this.transform.worldMatrix;
+        const v = new Float32Array(8);
+        for (let i = 0; i < 4; i++) {
+            const px = vertices[i * 2];
+            const py = vertices[i * 2 + 1];
+            v[i * 2] = px * m[0] + py * m[3] + m[6];
+            v[i * 2 + 1] = px * m[1] + py * m[4] + m[7];
         }
+
+        renderer.drawQuad(whiteTex.baseTexture, v, uvs, color);
     }
-
-    currentRow = endRow;
-
-    // 更新进度
-    const progress = Math.floor((currentRow / totalRows) * 100);
-    // loadingText.text = `Loading Scene... ${progress}%`;
-    // 手动触发布局更新和重绘
-    // loadingText.width = 0; // 强制重新测量
-    // engine.scene.invalidate();
-
-    if (currentRow < totalRows) {
-            requestAnimationFrame(loadBatch);
-        } else {
-            console.log("Scene loading complete");
-            // engine.scene.removeChild(loadingText);
-            
-            const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
-            instruction.transform.setPosition(20, 20);
-            instruction.fontSize = 16;
-            instruction.fillStyle = "black";
-            instruction.name = "Instructions";
-            engine.scene.addChild(instruction);
-
-            // 更新大纲视图
-            engine.outline.update();
-        }
 }
 
-// 启动分帧加载
-requestAnimationFrame(loadBatch);
+async function initApp() {
+    const app = document.getElementById('app')!;
+    if (!app) return;
 
-console.log("Engine started");
+    // 确保容器有尺寸
+    if (app.clientWidth === 0 || app.clientHeight === 0) {
+        app.style.width = '100vw';
+        app.style.height = '100vh';
+    }
 
-// ==========================================
-// UI Logic: Add Buttons to create components
-// ==========================================
+    const engine = new Engine(app);
 
-const uiContainer = document.createElement('div');
-uiContainer.style.position = 'absolute';
-uiContainer.style.top = '10px';
-uiContainer.style.right = '10px';
-uiContainer.style.display = 'flex';
-uiContainer.style.gap = '10px';
-document.body.appendChild(uiContainer);
+    // 1. 等待引擎初始化完成 (加载 WASM, 纹理等)
+    console.log("[Main] Initializing engine...");
+    await engine.init();
+    console.log("[Main] Engine initialized.");
 
-function createButton(label: string, onClick: () => void) {
-    const btn = document.createElement('button');
-    btn.innerText = label;
-    btn.style.padding = '8px 12px';
-    btn.style.fontSize = '14px';
-    btn.style.cursor = 'pointer';
-    btn.addEventListener('click', onClick);
-    uiContainer.appendChild(btn);
+    // 2. 添加瓦片层 (背景 - 最先添加，处于最底层)
+    const tileLayer = new TileLayer(256, createTileSource, 12);
+    tileLayer.name = "MapLayer";
+    engine.scene.addChild(tileLayer);
+
+
+    // 5. 性能测试：创建 100,000 个节点
+    console.time("PerformanceTest: Create 100k nodes");
+    const performanceContainer = new Container(engine.renderer.gl);
+    performanceContainer.name = "PerformanceContainer";
+    performanceContainer.interactive = true; // 开启交互
+    performanceContainer.layoutWidth = 5000;  // 给定一个大的布局尺寸
+    performanceContainer.layoutHeight = 5000;
+    performanceContainer.flexDirection = FlexDirection.Row;
+    performanceContainer.flexWrap = Wrap.Wrap; // 允许换行，否则 10 万个节点会排成一行
+    performanceContainer.gap = 10;
+    engine.scene.addChild(performanceContainer);
+
+    for (let i = 0; i < 100000; i++) {
+        const box = new Container(engine.renderer.gl);
+        box.name = `Box_${i}`;
+        box.interactive = true; // 开启子节点交互
+        // 随机大小
+        box.layoutWidth = 10 + Math.random() * 20;
+        box.layoutHeight = 10 + Math.random() * 20;
+        // 随机颜色
+        box.color = new Float32Array([
+            Math.random(),
+            Math.random(),
+            Math.random(),
+            0.8
+        ]);
+        performanceContainer.addChild(box);
+    }
+    console.timeEnd("PerformanceTest: Create 100k nodes");
+
+    // 4. 演示 Yoga 布局 (UI层 - 处于最顶层)
+    const root = new Container(engine.renderer.gl);
+    root.name = "UIRoot";
+    root.ignoreCamera = true; // UI 根节点忽略摄像机平移和缩放
+    root.flexDirection = FlexDirection.Column;
+    root.justifyContent = Justify.Center;
+    root.alignItems = Align.Center;
+    root.layoutWidth = '100%';
+    root.layoutHeight = '100%';
+    root.padding = 20;
+    root.interactive = true; // 允许作为拖拽目标
+    engine.scene.addChild(root);
+
+    const panel = new Container(engine.renderer.gl);
+    panel.name = "UIPanel";
+    panel.flexDirection = FlexDirection.Row;
+    panel.padding = 10;
+    panel.gap = 10;
+    panel.color = new Float32Array([1, 1, 1, 0.5]); // 半透明白色背景
+    panel.interactive = true; // 允许交互
+    root.addChild(panel);
+
+    // 添加两个子元素用于测试交互
+    const box1 = new Container(engine.renderer.gl);
+    box1.name = "BlueBox";
+    box1.layoutWidth = 100;
+    box1.layoutHeight = 100;
+    box1.color = new Float32Array([0.2, 0.5, 1, 1]); // 蓝色
+    box1.interactive = true; // 允许交互
+    panel.addChild(box1);
+
+    const box2 = new Container(engine.renderer.gl);
+    box2.name = "GreenBox";
+    box2.layoutWidth = 100;
+    box2.layoutHeight = 100;
+    box2.color = new Float32Array([0.2, 0.8, 0.2, 1]); // 绿色
+    box2.interactive = true; // 允许交互
+    panel.addChild(box2);
+
+    // 计算布局并强制刷新
+    engine.scene.calculateLayout(engine.renderer.width, engine.renderer.height);
+    engine.invalidateFull();
+
+    console.log("[Main] App setup complete. Scene children:", engine.scene.children.length);
 }
 
-// 1. Add Sprite Button
-createButton("添加图片 (Sprite)", () => {
-    // Create random color sprite
-    const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
-    const url = createDebugImage("New Sprite", color, 100, 100);
-
-    const sprite = new Sprite(engine.renderer.gl, url);
-    sprite.width = 100;
-    sprite.height = 100;
-    sprite.interactive = true;
-    sprite.name = `Sprite_${Math.floor(Math.random() * 1000)}`;
-
-    // Position at center of screen (approx, relative to scene)
-    // We should inverse transform screen center to scene local
-    // For simplicity, just put it at 400, 400 or random offset from current scene pos
-    // Better: Put it at (400, 400)
-    sprite.x = 400 + Math.random() * 50;
-    sprite.y = 400 + Math.random() * 50;
-
-    engine.scene.addChild(sprite);
-    console.log(`Created ${sprite.name}`);
-});
-
-// 2. Add Container Button
-// 2. Add Container Button
-createButton("添加容器 (Container)", () => {
-    const container = new Container(engine.renderer.gl);
-    container.name = `Container_${Math.floor(Math.random() * 1000)}`;
-    container.x = 300 + Math.random() * 50;
-    container.y = 300 + Math.random() * 50;
-    container.interactive = true;
-    container.width = 200;
-    container.height = 200;
-
-    // Visual background set directly
-    container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
-
-    engine.scene.addChild(container);
-    console.log(`Created ${container.name}`);
-});
-
-// ==========================================
-// Performance Stats & Debug Tools
-// ==========================================
-
-const statsContainer = document.createElement('div');
-statsContainer.style.position = 'absolute';
-statsContainer.style.bottom = '10px';
-statsContainer.style.left = '10px';
-statsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-statsContainer.style.color = '#00ff00';
-statsContainer.style.padding = '10px';
-statsContainer.style.fontFamily = 'monospace';
-statsContainer.style.fontSize = '12px';
-statsContainer.style.pointerEvents = 'none';
-statsContainer.style.zIndex = '1000';
-document.body.appendChild(statsContainer);
-
-let lastUpdateTime = 0;
-let totalNodes = 0;
-let frames = 0;
-let fps = 0;
-let lastFpsTime = performance.now();
-
-function updateStats(time: number) {
-    // 每一帧都增加帧计数，用于计算准确的 FPS
-    frames++;
-    const now = performance.now();
-    if (now > lastFpsTime + 1000) {
-        fps = Math.round((frames * 1000) / (now - lastFpsTime));
-        lastFpsTime = now;
-        frames = 0;
-    }
-
-    // 每 200ms 更新一次 UI，而不是每帧 (16ms)
-    if (time - lastUpdateTime < 300) {
-        requestAnimationFrame(updateStats);
-        return;
-    }
-    lastUpdateTime = time;
-
-    const glStats = engine.renderer.stats;
-    const scene = engine.scene;
-    const memTracker = MemoryTracker.getInstance();
-    const memStats = memTracker.getStats();
-    
-    // 只有当节点数量可能变化时才重新遍历 (或者简单地每秒遍历一次)
-    if (totalNodes === 0 || Math.random() < 0.05) {
-        totalNodes = 0;
-        scene.traverse(() => totalNodes++);
-    }
-
-    statsContainer.innerHTML = `
-        <div style="font-weight: bold; color: #fff; margin-bottom: 5px;">Performance Monitor</div>
-        FPS: ${fps}<br>
-        Total Nodes: ${totalNodes}<br>
-        Draw Calls: ${glStats.drawCalls}<br>
-        Quads: ${glStats.quadCount}<br>
-        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
-        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Memory Usage</div>
-        <div style="color: #00ffff;">Total: ${MemoryTracker.formatBytes(memStats.totalBytes)}</div>
-        GPU Tex: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Texture'] || 0)}<br>
-        GPU Buf: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Buffer'] || 0)}<br>
-        CPU Canvas: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU Canvas'] || 0)}<br>
-        CPU Array: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU TypedArray'] || 0)}<br>
-        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
-        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
-        Transform: ${glStats.times.transform.toFixed(2)}<br>
-        WebGL Render: ${glStats.times.renderWebGL.toFixed(2)}<br>
-        Flush (GPU): ${glStats.times.flush.toFixed(2)}<br>
-        Canvas 2D: ${glStats.times.canvas2D.toFixed(2)}<br>
-        Logic: ${glStats.times.logic.toFixed(2)}<br>
-        Hit Test: ${glStats.times.hitTest.toFixed(2)}<br>
-        Box Select: ${glStats.times.boxSelect.toFixed(2)}<br>
-        <div style="color: #ffff00; margin-top: 2px;">Total: ${glStats.times.total.toFixed(2)}</div>
-    `;
-    requestAnimationFrame(updateStats);
-}
-requestAnimationFrame(updateStats);
+initApp().catch(console.error);

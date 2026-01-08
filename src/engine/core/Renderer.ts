@@ -131,6 +131,10 @@ export class Renderer {
      * @param h 高度
      */
     resize(w: number, h: number) {
+        // 防止 0 宽高导致投影矩阵出现 Infinity
+        if (w <= 0) w = 100;
+        if (h <= 0) h = 100;
+
         this.width = w;
         this.height = h;
 
@@ -396,7 +400,8 @@ void main() {
 
         // 2. 清除 WebGL 画布
         // 如果启用了 Scissor，clear 只会清除 Scissor 区域
-        this.gl.clearColor(0.1, 0.1, 0.1, 1);
+        console.log(`[Renderer] Rendering frame ${this._frameCount}, size: ${this.width}x${this.height}, dirtyRect:`, dirtyRect);
+        this.gl.clearColor(0.2, 0.3, 0.4, 1); // 使用一个明显的深蓝色，而不是接近黑色的 0.1
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
         // 更新场景的世界变换矩阵

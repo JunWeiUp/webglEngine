@@ -31,6 +31,9 @@ export class InteractionManager {
     // 状态标记
     private isPanning: boolean = false;
     private isBoxSelecting: boolean = false;
+    private isResizing: boolean = false;
+    private resizingNode: Node | null = null;
+    private resizingHandle: string | null = null;
 
     // 摄像机状态 (取代直接修改 scene 坐标)
     private cameraX: number = 0;
@@ -41,6 +44,18 @@ export class InteractionManager {
     private lastMousePos: vec2 = vec2.create();
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
+
+    // 缩放手柄光标映射
+    private static readonly HANDLE_CURSORS: Record<string, string> = {
+        'nw': 'nwse-resize',
+        'n': 'ns-resize',
+        'ne': 'nesw-resize',
+        'e': 'ew-resize',
+        'se': 'nwse-resize',
+        's': 'ns-resize',
+        'sw': 'nesw-resize',
+        'w': 'ew-resize'
+    };
 
     // 绑定后的事件处理器，用于注销
     private _handlers: Record<string, (e: any) => void> = {};
@@ -119,34 +134,35 @@ export class InteractionManager {
     }
 
     /**
-     * 拾取检测 (Hit Test)
-     * 深度优先遍历，从后往前查找 (后渲染的先检测)
+     * 递归碰撞检测
+     * @param node 当前节点
+     * @param screenPos 屏幕坐标 (0,0 在左上角)
+     * @param worldPos 世界坐标 (受摄像机影响)
      */
-    private hitTest(node: Node, worldPos: vec2): Node | null {
-        // 1. 递归检测子节点 (后添加的子节点在数组末尾，先渲染，因此先检测)
+    private hitTest(node: Node, screenPos: vec2, worldPos: vec2): Node | null {
+        // 0. 剪枝优化：如果点击点不在节点的包围盒内，跳过该子树
+        // 注意：Scene 根节点通常没有有效的 worldMinX，所以排除它
+        if (node.parent && node.worldMinX !== Infinity) {
+            const testPos = node.ignoreCamera ? screenPos : worldPos;
+            if (testPos[0] < node.worldMinX - 0.5 || testPos[0] > node.worldMaxX + 0.5 ||
+                testPos[1] < node.worldMinY - 0.5 || testPos[1] > node.worldMaxY + 0.5) {
+                return null;
+            }
+        }
+
+        // 1. 先递归检测子节点 (后添加的子节点在最上面)
         const children = node.children;
         for (let i = children.length - 1; i >= 0; i--) {
-            const hit = this.hitTest(children[i], worldPos);
+            const hit = this.hitTest(children[i], screenPos, worldPos);
             if (hit) return hit;
         }
 
         // 2. 检测当前节点
-        if (node.interactive && node !== this.scene) {
-            // 使用 AABB 包围盒进行快速初步检测
-            if (worldPos[0] >= node.worldMinX && worldPos[0] <= node.worldMaxX &&
-                worldPos[1] >= node.worldMinY && worldPos[1] <= node.worldMaxY) {
-                
-                // 进一步精确检测：将世界坐标转换到节点的局部坐标系
-                const localPos = vec2.create();
-                const invertWorld = mat3.create();
-                mat3.invert(invertWorld, node.transform.worldMatrix);
-                vec2.transformMat3(localPos, worldPos, invertWorld);
-
-                // 检查是否在节点的矩形范围内 (0, 0) 到 (width, height)
-                if (localPos[0] >= 0 && localPos[0] <= node.width &&
-                    localPos[1] >= 0 && localPos[1] <= node.height) {
-                    return node;
-                }
+        // 根据节点属性选择检测坐标空间
+        if (node.interactive) {
+            const testPos = (node as any).ignoreCamera ? screenPos : worldPos;
+            if (node.hitTest(testPos)) {
+                return node;
             }
         }
 
@@ -184,6 +200,20 @@ export class InteractionManager {
         const worldPos = this.getWorldMousePos(pos);
         this.lastMousePos = pos;
 
+        // 1. 优先检查缩放手柄 (Resize Handles)
+        const viewMatrix = this.renderer.getViewMatrix();
+        for (const node of this.auxLayer.selectedNodes) {
+            const handle = this.auxLayer.getHandleAt(node, viewMatrix, pos[0], pos[1]);
+            if (handle) {
+                this.isResizing = true;
+                this.resizingNode = node;
+                this.resizingHandle = handle;
+                this.renderer.ctx.canvas.style.cursor = InteractionManager.HANDLE_CURSORS[handle] || 'default';
+                this.scene.invalidate();
+                return;
+            }
+        }
+
         if (e.shiftKey) {
             this.isBoxSelecting = true;
             vec2.copy(this.boxSelectStart, worldPos);
@@ -193,7 +223,7 @@ export class InteractionManager {
             return;
         }
 
-        const hit = this.hitTest(this.scene, worldPos);
+        const hit = this.hitTest(this.scene, pos, worldPos);
 
         if (hit) {
             if (this.auxLayer.selectedNodes.has(hit)) {
@@ -259,11 +289,64 @@ export class InteractionManager {
         const worldPos = this.getWorldMousePos(pos);
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
-        let needsRender = false;
+
+        // 处理缩放逻辑
+        if (this.isResizing && this.resizingNode && this.resizingHandle) {
+            const node = this.resizingNode;
+            const handle = this.resizingHandle;
+            
+            this.renderer.ctx.canvas.style.cursor = InteractionManager.HANDLE_CURSORS[handle] || 'default';
+
+            // 根据节点是否忽略摄像机来决定增量计算方式
+            const isIgnoreCamera = (node as any).ignoreCamera;
+            const dx = isIgnoreCamera ? deltaX : deltaX / this.cameraScale;
+            const dy = isIgnoreCamera ? deltaY : deltaY / this.cameraScale;
+
+            // 获取父节点的逆矩阵，将屏幕/世界空间增量转换回父节点局部空间
+            const parent = node.parent;
+            let localDeltaX = dx;
+            let localDeltaY = dy;
+
+            if (parent) {
+                const invertParent = mat3.create();
+                mat3.invert(invertParent, parent.transform.worldMatrix);
+                const m = invertParent;
+                localDeltaX = dx * m[0] + dy * m[3];
+                localDeltaY = dx * m[1] + dy * m[4];
+            }
+
+            // 根据手柄类型更新尺寸和位置
+            if (handle.includes('e')) {
+                node.layoutWidth = Math.max(1, (node.width || 0) + localDeltaX);
+            }
+            if (handle.includes('s')) {
+                node.layoutHeight = Math.max(1, (node.height || 0) + localDeltaY);
+            }
+            if (handle.includes('w')) {
+                const dw = Math.min(node.width - 1, localDeltaX);
+                node.x += dw;
+                node.layoutWidth = node.width - dw;
+            }
+            if (handle.includes('n')) {
+                const dh = Math.min(node.height - 1, localDeltaY);
+                node.y += dh;
+                node.layoutHeight = node.height - dh;
+            }
+
+            // 强制重新计算布局
+            const root = this.engine.scene;
+            root.calculateLayout(this.renderer.width, this.renderer.height);
+            
+            this.lastMousePos = pos;
+            this.scene.invalidate();
+            return;
+        }
 
         if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1 && !this.isBoxSelecting) {
             return;
         }
+
+        let needsRender = false;
 
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
             vec2.copy(this.auxLayer.selectionRect.end, worldPos);
@@ -276,26 +359,40 @@ export class InteractionManager {
             return;
         }
 
-        if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
-            const hit = this.hitTest(this.scene, worldPos);
-            if (this.auxLayer.hoveredNode !== hit) {
-                const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
-                this.auxLayer.hoveredNode = hit;
-                const newBounds = this.getNodeScreenBounds(hit);
-
-                if (this.onHoverChange) this.onHoverChange();
-                this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
-
-                const padding = 4;
-                if (oldBounds) {
-                    oldBounds.x -= padding; oldBounds.y -= padding;
-                    oldBounds.width += padding * 2; oldBounds.height += padding * 2;
-                    this.engine.invalidateAuxArea(oldBounds);
+        if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting && !this.isResizing) {
+            // 优先检查手柄悬停
+            const viewMatrix = this.renderer.getViewMatrix();
+            let handleHovered = false;
+            for (const node of this.auxLayer.selectedNodes) {
+                const handle = this.auxLayer.getHandleAt(node, viewMatrix, pos[0], pos[1]);
+                if (handle) {
+                    this.renderer.ctx.canvas.style.cursor = InteractionManager.HANDLE_CURSORS[handle] || 'default';
+                    handleHovered = true;
+                    break;
                 }
-                if (newBounds) {
-                    newBounds.x -= padding; newBounds.y -= padding;
-                    newBounds.width += padding * 2; newBounds.height += padding * 2;
-                    this.engine.invalidateAuxArea(newBounds);
+            }
+
+            if (!handleHovered) {
+                const hit = this.hitTest(this.scene, pos, worldPos);
+                if (this.auxLayer.hoveredNode !== hit) {
+                    const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
+                    this.auxLayer.hoveredNode = hit;
+                    const newBounds = this.getNodeScreenBounds(hit);
+
+                    if (this.onHoverChange) this.onHoverChange();
+                    this.renderer.ctx.canvas.style.cursor = hit ? 'pointer' : 'default';
+
+                    const padding = 4;
+                    if (oldBounds) {
+                        oldBounds.x -= padding; oldBounds.y -= padding;
+                        oldBounds.width += padding * 2; oldBounds.height += padding * 2;
+                        this.engine.invalidateAuxArea(oldBounds);
+                    }
+                    if (newBounds) {
+                        newBounds.x -= padding; newBounds.y -= padding;
+                        newBounds.width += padding * 2; newBounds.height += padding * 2;
+                        this.engine.invalidateAuxArea(newBounds);
+                    }
                 }
             }
         }
@@ -303,17 +400,23 @@ export class InteractionManager {
         if (this.auxLayer.draggingNode) {
             const draggingNode = this.auxLayer.draggingNode;
             const topLevelNodes = this.getTopLevelSelectedNodes();
-            const worldDeltaX = deltaX / this.cameraScale;
-            const worldDeltaY = deltaY / this.cameraScale;
-
+            
             for (const node of topLevelNodes) {
                 const parent = node.parent;
                 if (parent) {
+                    // 根据节点是否忽略摄像机来决定增量计算方式
+                    const isIgnoreCamera = (node as any).ignoreCamera;
+                    const dx = isIgnoreCamera ? deltaX : deltaX / this.cameraScale;
+                    const dy = isIgnoreCamera ? deltaY : deltaY / this.cameraScale;
+
                     const invertParent = mat3.create();
                     mat3.invert(invertParent, parent.transform.worldMatrix);
                     const m = invertParent;
-                    const localDeltaX = worldDeltaX * m[0] + worldDeltaY * m[3];
-                    const localDeltaY = worldDeltaX * m[1] + worldDeltaY * m[4];
+                    
+                    // 将屏幕/世界空间增量转换回父节点局部空间
+                    const localDeltaX = dx * m[0] + dy * m[3];
+                    const localDeltaY = dx * m[1] + dy * m[4];
+                    
                     node.x += localDeltaX;
                     node.y += localDeltaY;
                 }
@@ -324,7 +427,9 @@ export class InteractionManager {
                 originalInteractives.set(node, node.interactive);
                 node.interactive = false;
             }
-            const hit = this.hitTest(this.scene, worldPos);
+
+            const hit = this.hitTest(this.scene, pos, worldPos);
+
             for (const node of topLevelNodes) {
                 node.interactive = originalInteractives.get(node) || false;
             }
@@ -389,6 +494,13 @@ export class InteractionManager {
 
     private onMouseUp(e: MouseEvent) {
         let needsRender = false;
+
+        if (this.isResizing) {
+            this.isResizing = false;
+            this.resizingNode = null;
+            this.resizingHandle = null;
+            needsRender = true;
+        }
 
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
             const start = this.auxLayer.selectionRect.start;

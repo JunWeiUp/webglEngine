@@ -1,18 +1,33 @@
 import { mat3, vec2 } from 'gl-matrix';
 import { Transform } from '../core/Transform';
-import { Renderer } from '../core/Renderer';
 import type { IRenderer } from '../core/IRenderer';
 import type { Rect } from '../core/Rect';
+import { LayoutManager } from '../utils/LayoutManager';
+import type { Node as YogaNode } from 'yoga-layout';
+import {
+    FlexDirection,
+    Justify,
+    Align,
+    Wrap,
+    PositionType,
+    Edge,
+    Gutter
+} from 'yoga-layout';
 
 /**
  * Node 类
  * 
  * 场景图中的基本节点，具有层级关系（父子节点）。
  * 包含变换信息（Transform）、尺寸、交互状态等。
+ * 集成了 yoga-layout 用于 Flexbox 布局。
  */
 export class Node {
     private static _nextId = 0;
     public readonly id = Node._nextId++;
+
+    /** Yoga 布局节点 */
+    private _yogaNode: YogaNode | null = null;
+    private _isLayoutEnabled: boolean = false;
 
     /** 变换组件 (位置、旋转、缩放) */
     public transform: Transform = new Transform(this.id);
@@ -25,6 +40,252 @@ export class Node {
             this._children = [];
         }
         return this._children;
+    }
+
+    /**
+     * 获取或创建 Yoga 节点
+     */
+    public get yogaNode(): YogaNode {
+        if (!this._yogaNode) {
+            const yoga = LayoutManager.getInstance().yoga;
+            if (!yoga) {
+                throw new Error('Yoga is not initialized. Call LayoutManager.init() first.');
+            }
+            this._yogaNode = yoga.Node.create();
+
+            // 如果已有子节点且当前节点开启了布局，同步到 Yoga
+            if (this._isLayoutEnabled && this._children) {
+                for (let i = 0; i < this._children.length; i++) {
+                    const child = this._children[i];
+                    this._yogaNode.insertChild(child.yogaNode, i);
+                }
+            }
+        }
+        return this._yogaNode;
+    }
+
+    public get isLayoutEnabled(): boolean {
+        return this._isLayoutEnabled;
+    }
+
+    public set isLayoutEnabled(value: boolean) {
+        this._isLayoutEnabled = value;
+    }
+
+    // --- Yoga Layout Properties ---
+
+    public get flexDirection(): FlexDirection { return this.yogaNode.getFlexDirection(); }
+    public set flexDirection(v: FlexDirection) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setFlexDirection(v); 
+    }
+
+    public get justifyContent(): Justify { return this.yogaNode.getJustifyContent(); }
+    public set justifyContent(v: Justify) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setJustifyContent(v); 
+    }
+
+    public get alignItems(): Align { return this.yogaNode.getAlignItems(); }
+    public set alignItems(v: Align) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setAlignItems(v); 
+    }
+
+    public get alignSelf(): Align { return this.yogaNode.getAlignSelf(); }
+    public set alignSelf(v: Align) { this.yogaNode.setAlignSelf(v); }
+
+    public get flexWrap(): Wrap { return this.yogaNode.getFlexWrap(); }
+    public set flexWrap(v: Wrap) { this.yogaNode.setFlexWrap(v); }
+
+    public get flexGrow(): number { return this.yogaNode.getFlexGrow(); }
+    public set flexGrow(v: number) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setFlexGrow(v); 
+    }
+
+    public get flexShrink(): number { return this.yogaNode.getFlexShrink(); }
+    public set flexShrink(v: number) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setFlexShrink(v); 
+    }
+
+    public get flexBasis(): number | string { return this.yogaNode.getFlexBasis().value; }
+    public set flexBasis(v: number | string) { 
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setFlexBasisPercent(parseFloat(v));
+        } else {
+            this.yogaNode.setFlexBasis(v as number);
+        }
+    }
+
+    public set padding(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPaddingPercent(Edge.All, parseFloat(v));
+        } else {
+            this.yogaNode.setPadding(Edge.All, v as number);
+        }
+    }
+
+    public get paddingLeft(): number | string { return this.yogaNode.getPadding(Edge.Left).value; }
+    public set paddingLeft(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPaddingPercent(Edge.Left, parseFloat(v));
+        } else {
+            this.yogaNode.setPadding(Edge.Left, v as number);
+        }
+    }
+
+    public get paddingTop(): number | string { return this.yogaNode.getPadding(Edge.Top).value; }
+    public set paddingTop(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPaddingPercent(Edge.Top, parseFloat(v));
+        } else {
+            this.yogaNode.setPadding(Edge.Top, v as number);
+        }
+    }
+
+    public get paddingRight(): number | string { return this.yogaNode.getPadding(Edge.Right).value; }
+    public set paddingRight(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPaddingPercent(Edge.Right, parseFloat(v));
+        } else {
+            this.yogaNode.setPadding(Edge.Right, v as number);
+        }
+    }
+
+    public get paddingBottom(): number | string { return this.yogaNode.getPadding(Edge.Bottom).value; }
+    public set paddingBottom(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPaddingPercent(Edge.Bottom, parseFloat(v));
+        } else {
+            this.yogaNode.setPadding(Edge.Bottom, v as number);
+        }
+    }
+
+    public get margin(): number | string { return this.yogaNode.getMargin(Edge.All).value; }
+    public set margin(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setMarginPercent(Edge.All, parseFloat(v));
+        } else if (v === 'auto') {
+            this.yogaNode.setMarginAuto(Edge.All);
+        } else { 
+            this.yogaNode.setMargin(Edge.All, v as number);
+        }
+    }
+
+    public get marginLeft(): number | string { return this.yogaNode.getMargin(Edge.Left).value; }
+    public set marginLeft(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setMarginPercent(Edge.Left, parseFloat(v));
+        } else if (v === 'auto') {
+            this.yogaNode.setMarginAuto(Edge.Left);
+        } else {
+            this.yogaNode.setMargin(Edge.Left, v as number);
+        }
+    }
+
+    public get marginTop(): number | string { return this.yogaNode.getMargin(Edge.Top).value; }
+    public set marginTop(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setMarginPercent(Edge.Top, parseFloat(v));
+        } else if (v === 'auto') {
+            this.yogaNode.setMarginAuto(Edge.Top);
+        } else {
+            this.yogaNode.setMargin(Edge.Top, v as number);
+        }
+    }
+
+    public get gap(): number | string { return this.yogaNode.getGap(Gutter.All).value; }
+    public set gap(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setGapPercent(Gutter.All, parseFloat(v));
+        } else {
+            this.yogaNode.setGap(Gutter.All, v as number);
+        }
+    }
+
+    public get positionType(): PositionType { return this.yogaNode.getPositionType(); }
+    public set positionType(v: PositionType) { 
+        this._isLayoutEnabled = true;
+        this.yogaNode.setPositionType(v); 
+    }
+
+    /** 绝对定位控制 */
+    public get top(): number | string { return this.yogaNode.getPosition(Edge.Top).value; }
+    public set top(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPositionPercent(Edge.Top, parseFloat(v));
+        } else {
+            this.yogaNode.setPosition(Edge.Top, v as number);
+        }
+    }
+
+    public get left(): number | string { return this.yogaNode.getPosition(Edge.Left).value; }
+    public set left(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPositionPercent(Edge.Left, parseFloat(v));
+        } else {
+            this.yogaNode.setPosition(Edge.Left, v as number);
+        }
+    }
+
+    public get right(): number | string { return this.yogaNode.getPosition(Edge.Right).value; }
+    public set right(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPositionPercent(Edge.Right, parseFloat(v));
+        } else {
+            this.yogaNode.setPosition(Edge.Right, v as number);
+        }
+    }
+
+    public get bottom(): number | string { return this.yogaNode.getPosition(Edge.Bottom).value; }
+    public set bottom(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setPositionPercent(Edge.Bottom, parseFloat(v));
+        } else {
+            this.yogaNode.setPosition(Edge.Bottom, v as number);
+        }
+    }
+    
+    /** 设置宽度 (Yoga) */
+    public get layoutWidth(): number | string { return this.yogaNode.getWidth().value; }
+    public set layoutWidth(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setWidthPercent(parseFloat(v));
+        } else if (v === 'auto') {
+            this.yogaNode.setWidthAuto();
+        } else {
+            this.yogaNode.setWidth(v as number);
+        }
+    }
+
+    /** 设置高度 (Yoga) */
+    public get layoutHeight(): number | string { return this.yogaNode.getHeight().value; }
+    public set layoutHeight(v: number | string) {
+        this._isLayoutEnabled = true;
+        if (typeof v === 'string' && v.endsWith('%')) {
+            this.yogaNode.setHeightPercent(parseFloat(v));
+        } else if (v === 'auto') {
+            this.yogaNode.setHeightAuto();
+        } else {
+            this.yogaNode.setHeight(v as number);
+        }
     }
 
     /** 父节点引用 */
@@ -69,8 +330,10 @@ export class Node {
         }
     }
 
-    /** 节点名称 (调试用，可选以节省内存) */
-    public name?: string;
+    /** 节点名称 */
+    public name: string = "";
+    /** 是否忽略摄像机变换 (通常用于 UI 元素) */
+    public ignoreCamera: boolean = false;
 
     /** 
      * 遍历节点树
@@ -270,6 +533,11 @@ export class Node {
         child.parent = this;
         this.children.push(child);
         
+        // 如果开启了布局，同步到 Yoga 树 (仅当父节点开启了布局时)
+        if (this._isLayoutEnabled) {
+            this.yogaNode.insertChild(child.yogaNode, this.children.length - 1);
+        }
+
         // 结构变化，标记子树脏
         this.markTransformDirty();
 
@@ -291,6 +559,12 @@ export class Node {
 
             this._children.splice(index, 1);
             child.parent = null;
+
+            // 如果开启了布局，同步到 Yoga 树 (仅当父节点开启了布局时)
+            if (this._isLayoutEnabled && this._yogaNode && child._yogaNode) {
+                this._yogaNode.removeChild(child._yogaNode);
+            }
+
             this.invalidate(); // 结构变化需要重绘
         }
     }
@@ -301,6 +575,66 @@ export class Node {
             node = node.parent;
         }
         return node;
+    }
+
+    /**
+     * 计算 Yoga 布局并更新节点变换
+     * @param width 容器宽度 (可选)
+     * @param height 容器高度 (可选)
+     */
+    public calculateLayout(width?: number, height?: number): void {
+        if (this._isLayoutEnabled && this._yogaNode) {
+            console.log(`[Node] Calculating layout for "${this.name || 'unnamed'}" with size: ${width}x${height}`);
+            // 如果当前节点开启了布局，执行计算并应用结果
+            this._yogaNode.calculateLayout(width, height);
+            this.applyLayout();
+        } else {
+            // 如果当前节点未开启布局，但其子节点可能开启了布局
+            // 递归让开启了布局的子节点作为布局根节点进行计算
+            if (this._children) {
+                for (const child of this._children) {
+                    // 如果子节点开启了布局，它就是一个独立的布局容器
+                    // 此时它的布局计算宽度/高度应该由它自己的设置或父容器决定
+                    child.calculateLayout(child.width || width, child.height || height);
+                }
+            }
+        }
+    }
+
+    /**
+     * 递归将 Yoga 计算结果应用到节点
+     */
+    private applyLayout(): void {
+        if (this._isLayoutEnabled && this._yogaNode) {
+            const layout = this._yogaNode.getComputedLayout();
+            
+            // 只有当值发生变化时才更新，减少失效通知
+            // 注意：Yoga 返回的是相对于父节点的局部坐标
+            if (this.x !== layout.left || this.y !== layout.top || this.width !== layout.width || this.height !== layout.height) {
+                console.log(`[Node] Applying layout to "${this.name || 'unnamed'}": x=${layout.left}, y=${layout.top}, w=${layout.width}, h=${layout.height}`);
+                
+                if (this.x !== layout.left || this.y !== layout.top) {
+                    this.setTransform(layout.left, layout.top, this.scaleX, this.scaleY);
+                }
+                
+                if (this.width !== layout.width || this.height !== layout.height) {
+                    this.width = layout.width;
+                    this.height = layout.height;
+                    this.markTransformDirty();
+                }
+
+                // 强制更新世界包围盒，确保交互系统（Hover/点击）能检测到
+                this.updateWorldAABB();
+            }
+        }
+
+        // 无论当前节点是否开启布局，都必须递归应用子节点的布局
+        // 因为当前节点的子节点可能开启了布局
+        if (this._children) {
+            for (const child of this._children) {
+                child.applyLayout();
+            }
+        }
     }
 
     /**
@@ -329,7 +663,16 @@ export class Node {
         let worldDirty = parentDirty;
 
         if (localDirty || parentDirty) {
-            this.transform.updateWorldTransform(parentWorldMatrix);
+            // 如果忽略摄像机，则父级矩阵视为单位矩阵 (通常用于 UI 根节点直接挂在 Scene 下)
+            const effectiveParentMatrix = this.ignoreCamera ? null : parentWorldMatrix;
+            this.transform.updateWorldTransform(effectiveParentMatrix);
+
+            // 安全检查：防止 NaN 导致整个场景树消失
+            if (isNaN(this.transform.worldMatrix[0])) {
+                console.warn(`[Node] NaN detected in worldMatrix for node "${this.name || 'unnamed'}", resetting to identity.`);
+                mat3.identity(this.transform.worldMatrix);
+            }
+
             worldDirty = true;
 
             // 2. 更新 World AABB (如果节点有尺寸)

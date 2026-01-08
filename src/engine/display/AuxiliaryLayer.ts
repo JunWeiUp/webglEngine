@@ -30,6 +30,10 @@ export class AuxiliaryLayer {
     // Box Selection
     public selectionRect: { start: vec2, end: vec2 } | null = null;
 
+    // Handle settings
+    public readonly handleSize: number = 8;
+    public activeHandle: string | null = null;
+
     constructor() { }
 
 
@@ -53,6 +57,7 @@ export class AuxiliaryLayer {
         for (const node of this.selectedNodes) {
             if (node !== this.draggingNode) {
                 this.drawBounds(ctx, node, viewMatrix, '#0000ff', 2, false, dirtyRect);
+                this.drawResizeHandles(ctx, node, viewMatrix, dirtyRect);
             }
         }
 
@@ -200,5 +205,77 @@ export class AuxiliaryLayer {
 
         // Reset dash
         ctx.setLineDash([]);
+    }
+
+    /**
+     * 获取指定屏幕坐标下的手柄类型
+     */
+    public getHandleAt(node: Node, viewMatrix: mat3, screenX: number, screenY: number): string | null {
+        const combined = mat3.create();
+        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+
+        const handles = this.getHandlePositions(node, combined);
+        const halfSize = this.handleSize / 2;
+
+        for (const [type, pos] of Object.entries(handles)) {
+            if (screenX >= pos[0] - halfSize && screenX <= pos[0] + halfSize &&
+                screenY >= pos[1] - halfSize && screenY <= pos[1] + halfSize) {
+                return type;
+            }
+        }
+
+        return null;
+    }
+
+    private drawResizeHandles(ctx: CanvasRenderingContext2D, node: Node, viewMatrix: mat3, dirtyRect?: Rect) {
+        const combined = mat3.create();
+        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+
+        const handles = this.getHandlePositions(node, combined);
+        const halfSize = this.handleSize / 2;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#0000ff';
+        ctx.lineWidth = 1;
+
+        for (const [type, pos] of Object.entries(handles)) {
+            // Culling check for handles
+            if (dirtyRect && (
+                pos[0] + halfSize < dirtyRect.x ||
+                pos[0] - halfSize > dirtyRect.x + dirtyRect.width ||
+                pos[1] + halfSize < dirtyRect.y ||
+                pos[1] - halfSize > dirtyRect.y + dirtyRect.height
+            )) {
+                continue;
+            }
+
+            ctx.fillRect(pos[0] - halfSize, pos[1] - halfSize, this.handleSize, this.handleSize);
+            ctx.strokeRect(pos[0] - halfSize, pos[1] - halfSize, this.handleSize, this.handleSize);
+        }
+    }
+
+    private getHandlePositions(node: Node, combinedMatrix: mat3): Record<string, vec2> {
+        const w = node.width;
+        const h = node.height;
+
+        const localPositions: Record<string, vec2> = {
+            'nw': vec2.fromValues(0, 0),
+            'n': vec2.fromValues(w / 2, 0),
+            'ne': vec2.fromValues(w, 0),
+            'e': vec2.fromValues(w, h / 2),
+            'se': vec2.fromValues(w, h),
+            's': vec2.fromValues(w / 2, h),
+            'sw': vec2.fromValues(0, h),
+            'w': vec2.fromValues(0, h / 2)
+        };
+
+        const screenPositions: Record<string, vec2> = {};
+        for (const [type, pos] of Object.entries(localPositions)) {
+            const screen = vec2.create();
+            vec2.transformMat3(screen, pos, combinedMatrix);
+            screenPositions[type] = screen;
+        }
+
+        return screenPositions;
     }
 }
