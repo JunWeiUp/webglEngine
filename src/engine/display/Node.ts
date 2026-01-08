@@ -31,9 +31,28 @@ export class Node {
     public parent: Node | null = null;
 
     /** 宽度 (用于包围盒/点击检测) */
-    public width: number = 0;
+    private _width: number = 0;
+    public get width(): number { return this._width; }
+    public set width(value: number) {
+        if (this._width !== value) {
+            this.invalidateWithSelfBounds(() => {
+                this._width = value;
+                this.markTransformDirty();
+            });
+        }
+    }
+
     /** 高度 (用于包围盒/点击检测) */
-    public height: number = 0;
+    private _height: number = 0;
+    public get height(): number { return this._height; }
+    public set height(value: number) {
+        if (this._height !== value) {
+            this.invalidateWithSelfBounds(() => {
+                this._height = value;
+                this.markTransformDirty();
+            });
+        }
+    }
 
     /** 世界坐标系下的 AABB 包围盒 (扁平化存储以节省内存) */
     public worldMinX: number = Infinity;

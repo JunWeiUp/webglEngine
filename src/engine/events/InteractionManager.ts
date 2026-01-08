@@ -39,6 +39,9 @@ export class InteractionManager {
 
     // 记录上一帧的鼠标位置 (用于计算 delta)
     private lastMousePos: vec2 = vec2.create();
+    // 拖拽/缩放开始时的状态记录
+    private dragStartMousePos: vec2 = vec2.create();
+    private dragStartNodesState: Map<Node, { x: number, y: number, w: number, h: number }> = new Map();
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
 
@@ -177,12 +180,140 @@ export class InteractionManager {
     }
 
     /**
+     * 检测鼠标是否在手柄上
+     */
+    private hitTestHandles(pos: vec2): { node: Node, handle: any } | null {
+        if (this.auxLayer.selectedNodes.size !== 1) return null;
+        
+        const node = this.auxLayer.selectedNode!;
+        const handles = this.auxLayer.getHandles(node, this.renderer.getViewMatrix());
+        const size = (this.auxLayer.constructor as any).HANDLE_SIZE || 8;
+
+        for (const handle of handles) {
+            if (pos[0] >= handle.x - size && pos[0] <= handle.x + size &&
+                pos[1] >= handle.y - size && pos[1] <= handle.y + size) {
+                return { node, handle };
+            }
+        }
+        return null;
+    }
+
+    private getCursorForHandle(handleType: string): string {
+        switch (handleType) {
+            case 'n':
+            case 's': return 'ns-resize';
+            case 'e':
+            case 'w': return 'ew-resize';
+            case 'nw':
+            case 'se': return 'nwse-resize';
+            case 'ne':
+            case 'sw': return 'nesw-resize';
+            default: return 'default';
+        }
+    }
+
+    /**
+     * 吸附逻辑
+     * @param node 当前操作的节点
+     * @param targetWorldX 目标世界坐标 X
+     * @param targetWorldY 目标世界坐标 Y
+     * @param threshold 像素阈值 (屏幕空间)
+     */
+    private snapNode(node: Node, targetX: number, targetY: number): { x: number, y: number } {
+        const parent = node.parent;
+        if (!parent) return { x: targetX, y: targetY };
+
+        const siblings = parent.children.filter(c => c !== node && c.interactive);
+        const scale = this.cameraScale;
+        const worldThreshold = 5 / scale;
+
+        this.auxLayer.alignmentLines = [];
+
+        // Candidates for snapping
+        const xTargets: { value: number, worldX: number }[] = [];
+        const yTargets: { value: number, worldY: number }[] = [];
+
+        // 1. Add siblings as targets
+        for (const sibling of siblings) {
+            const sXLines = [sibling.x, sibling.x + sibling.width / 2, sibling.x + sibling.width];
+            const sYLines = [sibling.y, sibling.y + sibling.height / 2, sibling.y + sibling.height];
+
+            sXLines.forEach((lx, i) => {
+                const worldX = sibling.transform.worldMatrix[6] + (i * sibling.width / 2);
+                xTargets.push({ value: lx, worldX });
+            });
+            sYLines.forEach((ly, i) => {
+                const worldY = sibling.transform.worldMatrix[7] + (i * sibling.height / 2);
+                yTargets.push({ value: ly, worldY });
+            });
+        }
+
+        // 2. Add parent boundaries as targets (0, center, size)
+        const pXLines = [0, parent.width / 2, parent.width];
+        const pYLines = [0, parent.height / 2, parent.height];
+        pXLines.forEach((lx, i) => {
+            const worldX = parent.transform.worldMatrix[6] + (i * parent.width / 2);
+            xTargets.push({ value: lx, worldX });
+        });
+        pYLines.forEach((ly, i) => {
+            const worldY = parent.transform.worldMatrix[7] + (i * parent.height / 2);
+            yTargets.push({ value: ly, worldY });
+        });
+
+        let snappedX = targetX;
+        let snappedY = targetY;
+
+        const myXLines = [targetX, targetX + node.width / 2, targetX + node.width];
+        const myYLines = [targetY, targetY + node.height / 2, targetY + node.height];
+
+        // Snap X
+        let minDX = worldThreshold;
+        for (let i = 0; i < 3; i++) {
+            for (const target of xTargets) {
+                const dx = Math.abs(myXLines[i] - target.value);
+                if (dx < minDX) {
+                    minDX = dx;
+                    snappedX = target.value - (i * node.width / 2);
+                    this.auxLayer.alignmentLines.push({ type: 'v', value: target.worldX });
+                }
+            }
+        }
+
+        // Snap Y
+        let minDY = worldThreshold;
+        for (let i = 0; i < 3; i++) {
+            for (const target of yTargets) {
+                const dy = Math.abs(myYLines[i] - target.value);
+                if (dy < minDY) {
+                    minDY = dy;
+                    snappedY = target.value - (i * node.height / 2);
+                    this.auxLayer.alignmentLines.push({ type: 'h', value: target.worldY });
+                }
+            }
+        }
+
+        return { x: snappedX, y: snappedY };
+    }
+
+    /**
      * 鼠标按下事件处理
      */
     private onMouseDown(e: MouseEvent) {
         const pos = this.getMousePos(e);
         const worldPos = this.getWorldMousePos(pos);
         this.lastMousePos = pos;
+        vec2.copy(this.dragStartMousePos, worldPos);
+        this.dragStartNodesState.clear();
+
+        // 1. Check handles first
+        const handleHit = this.hitTestHandles(pos);
+        if (handleHit) {
+            const node = handleHit.node;
+            this.auxLayer.activeHandle = handleHit.handle.type;
+            this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height });
+            this.scene.invalidate();
+            return;
+        }
 
         if (e.shiftKey) {
             this.isBoxSelecting = true;
@@ -199,11 +330,18 @@ export class InteractionManager {
             if (this.auxLayer.selectedNodes.has(hit)) {
                 this.auxLayer.draggingNode = hit;
                 vec2.copy(this.auxLayer.dragProxyPos, worldPos);
+                
+                // 记录所有选中节点的起始状态
+                this.auxLayer.selectedNodes.forEach(node => {
+                    this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height });
+                });
             } else {
                 this.auxLayer.selectedNodes.clear();
                 this.auxLayer.selectedNodes.add(hit);
                 this.auxLayer.draggingNode = hit;
                 vec2.copy(this.auxLayer.dragProxyPos, worldPos);
+                
+                this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height });
                 if (this.onSelectionChange) this.onSelectionChange();
             }
         } else {
@@ -276,7 +414,139 @@ export class InteractionManager {
             return;
         }
 
+        // Handle Resizing
+        if (this.auxLayer.activeHandle && this.auxLayer.selectedNode) {
+            const node = this.auxLayer.selectedNode;
+            const handleType = this.auxLayer.activeHandle;
+            
+            // Keep the resize cursor while dragging
+            this.renderer.ctx.canvas.style.cursor = this.getCursorForHandle(handleType);
+
+            const startState = this.dragStartNodesState.get(node);
+            if (!startState) return;
+
+            // Calculate total world delta since mouse down
+            const totalWorldDeltaX = worldPos[0] - this.dragStartMousePos[0];
+            const totalWorldDeltaY = worldPos[1] - this.dragStartMousePos[1];
+
+            // Convert total world delta to local delta
+            const parentNode = node.parent;
+            let localDeltaX = totalWorldDeltaX;
+            let localDeltaY = totalWorldDeltaY;
+            if (parentNode) {
+                const invertParent = mat3.create();
+                mat3.invert(invertParent, parentNode.transform.worldMatrix);
+                const m = invertParent;
+                localDeltaX = totalWorldDeltaX * m[0] + totalWorldDeltaY * m[3];
+                localDeltaY = totalWorldDeltaX * m[1] + totalWorldDeltaY * m[4];
+            }
+
+            // Logical size/position based on start state and total delta
+            let newX = startState.x;
+            let newY = startState.y;
+            let newW = startState.w;
+            let newH = startState.h;
+
+            if (handleType.includes('e')) {
+                newW += localDeltaX;
+            } else if (handleType.includes('w')) {
+                newX += localDeltaX;
+                newW -= localDeltaX;
+            }
+
+            if (handleType.includes('s')) {
+                newH += localDeltaY;
+            } else if (handleType.includes('n')) {
+                newY += localDeltaY;
+                newH -= localDeltaY;
+            }
+
+            // Apply snapping for resize
+            this.auxLayer.alignmentLines = [];
+            if (parentNode) {
+                const siblings = parentNode.children.filter(c => c !== node && c.interactive);
+                const scale = this.cameraScale;
+                const worldThreshold = 5 / scale;
+                const parentWM = parentNode.transform.worldMatrix;
+
+                // Vertical snapping (for X changes)
+                if (handleType.includes('e') || handleType.includes('w')) {
+                    // Calculate current world X of the handle
+                    const localX = handleType.includes('e') ? newX + newW : newX;
+                    const worldXLine = localX * parentWM[0] + parentWM[6];
+                    
+                    let foundX = false;
+                    for (const sibling of siblings) {
+                        const sXLines = [sibling.worldMinX, (sibling.worldMinX + sibling.worldMaxX) / 2, sibling.worldMaxX];
+                        for (let j = 0; j < 3; j++) {
+                            if (Math.abs(worldXLine - sXLines[j]) < worldThreshold) {
+                                const deltaWorld = sXLines[j] - worldXLine;
+                                const deltaLocal = deltaWorld / parentWM[0];
+                                if (handleType.includes('e')) {
+                                    newW += deltaLocal;
+                                } else {
+                                    newX += deltaLocal;
+                                    newW -= deltaLocal;
+                                }
+                                this.auxLayer.alignmentLines.push({ type: 'v', value: sXLines[j] });
+                                foundX = true;
+                                break;
+                            }
+                        }
+                        if (foundX) break;
+                    }
+                }
+
+                // Horizontal snapping (for Y changes)
+                if (handleType.includes('s') || handleType.includes('n')) {
+                    const localY = handleType.includes('s') ? newY + newH : newY;
+                    const worldYLine = localY * parentWM[4] + parentWM[7];
+
+                    let foundY = false;
+                    for (const sibling of siblings) {
+                        const sYLines = [sibling.worldMinY, (sibling.worldMinY + sibling.worldMaxY) / 2, sibling.worldMaxY];
+                        for (let j = 0; j < 3; j++) {
+                            if (Math.abs(worldYLine - sYLines[j]) < worldThreshold) {
+                                const deltaWorld = sYLines[j] - worldYLine;
+                                const deltaLocal = deltaWorld / parentWM[4];
+                                if (handleType.includes('s')) {
+                                    newH += deltaLocal;
+                                } else {
+                                    newY += deltaLocal;
+                                    newH -= deltaLocal;
+                                }
+                                this.auxLayer.alignmentLines.push({ type: 'h', value: sYLines[j] });
+                                foundY = true;
+                                break;
+                            }
+                        }
+                        if (foundY) break;
+                    }
+                }
+            }
+
+            node.x = newX;
+            node.y = newY;
+            node.width = newW;
+            node.height = newH;
+
+            this.lastMousePos = pos;
+            this.scene.invalidate();
+            return;
+        }
+
         if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
+            // Check handle hover
+            const handleHit = this.hitTestHandles(pos);
+            if (handleHit) {
+                this.auxLayer.hoveredHandle = handleHit.handle.type;
+                this.renderer.ctx.canvas.style.cursor = this.getCursorForHandle(handleHit.handle.type);
+                return;
+            } else if (this.auxLayer.hoveredHandle) {
+                this.auxLayer.hoveredHandle = null;
+                this.renderer.ctx.canvas.style.cursor = 'default';
+            }
+
             const hit = this.hitTest(this.scene, worldPos);
             if (this.auxLayer.hoveredNode !== hit) {
                 const oldBounds = this.getNodeScreenBounds(this.auxLayer.hoveredNode);
@@ -303,21 +573,43 @@ export class InteractionManager {
         if (this.auxLayer.draggingNode) {
             const draggingNode = this.auxLayer.draggingNode;
             const topLevelNodes = this.getTopLevelSelectedNodes();
-            const worldDeltaX = deltaX / this.cameraScale;
-            const worldDeltaY = deltaY / this.cameraScale;
+
+            // Calculate total world delta since mouse down
+            const totalWorldDeltaX = worldPos[0] - this.dragStartMousePos[0];
+            const totalWorldDeltaY = worldPos[1] - this.dragStartMousePos[1];
 
             for (const node of topLevelNodes) {
+                const startState = this.dragStartNodesState.get(node);
+                if (!startState) continue;
+
                 const parent = node.parent;
                 if (parent) {
                     const invertParent = mat3.create();
                     mat3.invert(invertParent, parent.transform.worldMatrix);
                     const m = invertParent;
-                    const localDeltaX = worldDeltaX * m[0] + worldDeltaY * m[3];
-                    const localDeltaY = worldDeltaX * m[1] + worldDeltaY * m[4];
-                    node.x += localDeltaX;
-                    node.y += localDeltaY;
+
+                    // Convert total world delta to local delta for this node
+                    // Use only rotation/scale for delta conversion
+                    const localDeltaX = totalWorldDeltaX * m[0] + totalWorldDeltaY * m[3];
+                    const localDeltaY = totalWorldDeltaX * m[1] + totalWorldDeltaY * m[4];
+
+                    // Logical position
+                    let newX = startState.x + localDeltaX;
+                    let newY = startState.y + localDeltaY;
+
+                    // Apply snapping to the logical position
+                    if (topLevelNodes.length === 1) {
+                        const snapped = this.snapNode(node, newX, newY);
+                        newX = snapped.x;
+                        newY = snapped.y;
+                    }
+
+                    node.x = newX;
+                    node.y = newY;
                 }
             }
+
+            vec2.copy(this.auxLayer.dragProxyPos, worldPos);
 
             const originalInteractives = new Map<Node, boolean>();
             for (const node of topLevelNodes) {
@@ -390,6 +682,13 @@ export class InteractionManager {
     private onMouseUp(e: MouseEvent) {
         let needsRender = false;
 
+        if (this.auxLayer.activeHandle) {
+            this.auxLayer.activeHandle = null;
+            this.auxLayer.alignmentLines = [];
+            this.renderer.ctx.canvas.style.cursor = 'default';
+            needsRender = true;
+        }
+
         if (this.isBoxSelecting && this.auxLayer.selectionRect) {
             const start = this.auxLayer.selectionRect.start;
             const end = this.auxLayer.selectionRect.end;
@@ -400,6 +699,7 @@ export class InteractionManager {
         }
 
         if (this.auxLayer.draggingNode) {
+            this.auxLayer.alignmentLines = [];
             const target = this.auxLayer.dragTargetNode;
             if (target) {
                 const topLevelNodes = this.getTopLevelSelectedNodes();
@@ -419,6 +719,7 @@ export class InteractionManager {
             }
             this.auxLayer.draggingNode = null;
             this.auxLayer.dragTargetNode = null;
+            this.dragStartNodesState.clear();
             needsRender = true;
         }
 

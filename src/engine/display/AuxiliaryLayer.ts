@@ -2,8 +2,25 @@ import { Node } from './Node';
 import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from '../core/Rect';
 
+export type HandleType = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+export interface Handle {
+    type: HandleType;
+    x: number;
+    y: number;
+}
+
+export interface AlignmentLine {
+    type: 'v' | 'h'; // vertical or horizontal
+    value: number;   // coordinate in world space
+}
+
 export class AuxiliaryLayer {
+    public static readonly HANDLE_SIZE = 8;
     public hoveredNode: Node | null = null;
+    public hoveredHandle: HandleType | null = null;
+    public activeHandle: HandleType | null = null;
+    public alignmentLines: AlignmentLine[] = [];
 
     // Multi-selection support
     public selectedNodes: Set<Node> = new Set();
@@ -53,6 +70,12 @@ export class AuxiliaryLayer {
         for (const node of this.selectedNodes) {
             if (node !== this.draggingNode) {
                 this.drawBounds(ctx, node, viewMatrix, '#0000ff', 2, false, dirtyRect);
+                
+                // Only draw handles for the first selected node (or all if you prefer)
+                // For simplicity, let's draw handles if only one node is selected
+                if (this.selectedNodes.size === 1) {
+                    this.drawHandles(ctx, node, viewMatrix, dirtyRect);
+                }
             }
         }
 
@@ -115,6 +138,39 @@ export class AuxiliaryLayer {
                 ctx.setLineDash([]);
             }
         }
+
+        // 5. Draw Alignment Lines (Smart Guides)
+        if (this.alignmentLines.length > 0) {
+            ctx.save();
+            ctx.strokeStyle = '#ff00ff'; // Magenta for guides
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+
+            const viewMatrix = renderer.getViewMatrix();
+            const width = ctx.canvas.width;
+            const height = ctx.canvas.height;
+
+            for (const line of this.alignmentLines) {
+                ctx.beginPath();
+                if (line.type === 'v') {
+                    // Vertical line: constant X in screen space
+                    const screenPos = vec2.create();
+                    vec2.transformMat3(screenPos, vec2.fromValues(line.value, 0), viewMatrix);
+                    const x = screenPos[0];
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                } else {
+                    // Horizontal line: constant Y in screen space
+                    const screenPos = vec2.create();
+                    vec2.transformMat3(screenPos, vec2.fromValues(0, line.value), viewMatrix);
+                    const y = screenPos[1];
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                }
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
     }
 
     private rectIntersects(bounds: { minX: number, minY: number, maxX: number, maxY: number }, dirtyRect?: Rect): boolean {
@@ -158,6 +214,57 @@ export class AuxiliaryLayer {
         }
 
         return { minX, minY, maxX, maxY };
+    }
+
+    public getHandles(node: Node, viewMatrix: mat3): Handle[] {
+        const combined = mat3.create();
+        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+
+        const w = node.width;
+        const h = node.height;
+
+        const positions: { type: HandleType, pos: vec2 }[] = [
+            { type: 'nw', pos: vec2.fromValues(0, 0) },
+            { type: 'n', pos: vec2.fromValues(w / 2, 0) },
+            { type: 'ne', pos: vec2.fromValues(w, 0) },
+            { type: 'e', pos: vec2.fromValues(w, h / 2) },
+            { type: 'se', pos: vec2.fromValues(w, h) },
+            { type: 's', pos: vec2.fromValues(w / 2, h) },
+            { type: 'sw', pos: vec2.fromValues(0, h) },
+            { type: 'w', pos: vec2.fromValues(0, h / 2) },
+        ];
+
+        return positions.map(p => {
+            const screen = vec2.create();
+            vec2.transformMat3(screen, p.pos, combined);
+            return { type: p.type, x: screen[0], y: screen[1] };
+        });
+    }
+
+    private drawHandles(ctx: CanvasRenderingContext2D, node: Node, viewMatrix: mat3, dirtyRect?: Rect) {
+        const handles = this.getHandles(node, viewMatrix);
+        const size = AuxiliaryLayer.HANDLE_SIZE;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#0000ff';
+        ctx.lineWidth = 1;
+
+        for (const handle of handles) {
+            // Culling
+            if (dirtyRect && (
+                handle.x + size / 2 < dirtyRect.x ||
+                handle.x - size / 2 > dirtyRect.x + dirtyRect.width ||
+                handle.y + size / 2 < dirtyRect.y ||
+                handle.y - size / 2 > dirtyRect.y + dirtyRect.height
+            )) {
+                continue;
+            }
+
+            ctx.beginPath();
+            ctx.rect(handle.x - size / 2, handle.y - size / 2, size, size);
+            ctx.fill();
+            ctx.stroke();
+        }
     }
 
     private drawBounds(ctx: CanvasRenderingContext2D, node: Node, viewMatrix: mat3, color: string, lineWidth: number, dashed: boolean = false, dirtyRect?: Rect) {
