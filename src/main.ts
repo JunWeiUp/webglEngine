@@ -82,8 +82,8 @@ const sprite1Url = createDebugImage("Sprite 1", "#ffcc00", 100, 100);
 const sprite2Url = createDebugImage("Sprite 2", "#00ccff", 100, 100);
 // 2. Add a Container
 // 使用分帧加载优化首屏卡顿 (Time Slicing)
-const totalRows = 3000; // 恢复为 100 行 (共 10000 个容器)
-const totalCols = 100;
+const totalRows = 1000; // 恢复为 100 行 (共 10000 个容器)
+const totalCols = 300;
 const batchSize = 5; // 每帧处理 5 行
 
 let currentRow = 0;
@@ -106,8 +106,9 @@ function loadBatch() {
             container.name = "MyContainer";
             container.transform.setPosition(300 * i, 300 * j);
             container.interactive = true;
-            container.width = 400;
-            container.height = 400;
+            // container.width = 400;
+            // container.height = 400;
+            container.set(container.x, container.y, 400, 400);
 
             container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
             // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
@@ -116,16 +117,19 @@ function loadBatch() {
             // 3. Add Sprites with generated images
             const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
             sprite1.transform.setPosition(50, 50);
-            sprite1.width = 100;
-            sprite1.height = 100;
+            // sprite1.width = 100;
+            // sprite1.height = 100;
+            sprite1.set(sprite1.x, sprite1.y, 100, 100);
             sprite1.interactive = true;
             sprite1.name = "Sprite1";
             container.addChild(sprite1, true);
 
             const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
             sprite2.transform.setPosition(200, 50);
-            sprite2.width = 100;
-            sprite2.height = 100;
+            // sprite2.width = 100;
+            // sprite2.height = 100;
+            sprite2.set(sprite2.x, sprite2.y, 100, 100);
+
             sprite2.interactive = true;
             sprite2.name = "Sprite2";
             container.addChild(sprite2, true);
@@ -151,21 +155,21 @@ function loadBatch() {
     // engine.scene.invalidate();
 
     if (currentRow < totalRows) {
-            requestAnimationFrame(loadBatch);
-        } else {
-            console.log("Scene loading complete");
-            // engine.scene.removeChild(loadingText);
-            
-            const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
-            instruction.transform.setPosition(20, 20);
-            instruction.fontSize = 16;
-            instruction.fillStyle = "black";
-            instruction.name = "Instructions";
-            engine.scene.addChild(instruction);
+        requestAnimationFrame(loadBatch);
+    } else {
+        console.log("Scene loading complete");
+        // engine.scene.removeChild(loadingText);
 
-            // 更新大纲视图
-            engine.outline.update();
-        }
+        const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
+        instruction.transform.setPosition(20, 20);
+        instruction.fontSize = 16;
+        instruction.fillStyle = "black";
+        instruction.name = "Instructions";
+        engine.scene.addChild(instruction);
+
+        // 更新大纲视图
+        engine.outline.update();
+    }
 }
 
 // 启动分帧加载
@@ -202,8 +206,10 @@ createButton("添加图片 (Sprite)", () => {
     const url = createDebugImage("New Sprite", color, 100, 100);
 
     const sprite = new Sprite(engine.renderer.gl, url);
-    sprite.width = 100;
-    sprite.height = 100;
+    // sprite.width = 100;
+    // sprite.height = 100;
+    sprite.set(sprite.x, sprite.y, 100, 100);
+
     sprite.interactive = true;
     sprite.name = `Sprite_${Math.floor(Math.random() * 1000)}`;
 
@@ -211,8 +217,9 @@ createButton("添加图片 (Sprite)", () => {
     // We should inverse transform screen center to scene local
     // For simplicity, just put it at 400, 400 or random offset from current scene pos
     // Better: Put it at (400, 400)
-    sprite.x = 400 + Math.random() * 50;
-    sprite.y = 400 + Math.random() * 50;
+    // sprite.x = 400 + Math.random() * 50;
+    // sprite.y = 400 + Math.random() * 50;
+    sprite.setPosition(400 + Math.random() * 50, 400 + Math.random() * 50);
 
     engine.scene.addChild(sprite);
     console.log(`Created ${sprite.name}`);
@@ -223,11 +230,12 @@ createButton("添加图片 (Sprite)", () => {
 createButton("添加容器 (Container)", () => {
     const container = new Container(engine.renderer.gl);
     container.name = `Container_${Math.floor(Math.random() * 1000)}`;
-    container.x = 300 + Math.random() * 50;
-    container.y = 300 + Math.random() * 50;
+    container.setPosition(300 + Math.random() * 50, 300 + Math.random() * 50);
     container.interactive = true;
-    container.width = 200;
-    container.height = 200;
+    // container.width = 200;
+    // container.height = 200;
+    container.set(container.x, container.y, 200, 200);
+
 
     // Visual background set directly
     container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
@@ -280,7 +288,7 @@ function updateStats(time: number) {
     const scene = engine.scene;
     const memTracker = MemoryTracker.getInstance();
     const memStats = memTracker.getStats();
-    
+
     // 只有当节点数量可能变化时才重新遍历 (或者简单地每秒遍历一次)
     if (totalNodes === 0 || Math.random() < 0.05) {
         totalNodes = 0;

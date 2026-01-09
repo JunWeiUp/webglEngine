@@ -23,7 +23,7 @@ export class TileLayer extends Node {
     public baseZoom: number = 12;
     /** 瓦片 URL 生成函数 */
     public tileSourceProvider: (x: number, y: number, z: number) => TileSource;
-    
+
     // 缓存纹理
     private tileTextures: Map<string, { texture: WebGLTexture, lastUsedTime: number, url?: string }> = new Map();
     // 正在加载的集合 (支持取消)
@@ -63,14 +63,16 @@ export class TileLayer extends Node {
         this.tileSize = tileSize;
         this.tileSourceProvider = tileSourceProvider;
         this.baseZoom = baseZoom;
-        
+
         // 设置一个巨大的包围盒，确保 TileLayer 始终在 RBush 空间索引中可见
         // 这样渲染器才能在空间查询时检索到它
-        this.width = 20000000; // 2千万像素，足够覆盖常规应用场景
-        this.height = 20000000;
+        // this.width = 20000000; // 2千万像素，足够覆盖常规应用场景
+        // this.height = 20000000;
         // 偏移中心，使其覆盖更大的范围
-        this.x = -10000000;
-        this.y = -10000000;
+        // this.x = -10000000;
+        // this.y = -10000000;
+        // this.setPosition(-10000000, -10000000);
+        this.set(-10000000, -10000000, 20000000, 20000000);
     }
 
     renderWebGL(renderer: Renderer, cullingRect?: Rect) {
@@ -78,7 +80,7 @@ export class TileLayer extends Node {
         // 现在需要结合视图矩阵 (Camera) 计算
         const viewMatrix = renderer.getViewMatrix();
         const wm = this.getWorldMatrix();
-        
+
         // 综合矩阵: view * world
         const combinedMatrix = mat3.create();
         mat3.multiply(combinedMatrix, viewMatrix, wm);
@@ -89,7 +91,7 @@ export class TileLayer extends Node {
         // 计算缩放层级差异
         const zoomDiff = Math.floor(Math.log2(globalScale));
         const effectiveZoom = this.baseZoom + zoomDiff;
-        
+
         // 计算世界单位下的有效瓦片大小
         const scaleFactor = Math.pow(2, -zoomDiff);
         const renderTileSize = this.tileSize * scaleFactor;
@@ -135,8 +137,8 @@ export class TileLayer extends Node {
 
         // 范围限制安全检查 (现在不太可能触发)
         if ((endX - startX) * (endY - startY) > 2500) {
-             // 保留作为安全措施
-             return;
+            // 保留作为安全措施
+            return;
         }
 
         for (let x = startX; x < endX; x++) {
@@ -144,21 +146,21 @@ export class TileLayer extends Node {
                 // Key 需要包含缩放级别！
                 const key = `${effectiveZoom}:${x},${y}`;
                 visibleKeys.add(key);
-                
+
                 // 按需加载
                 if (!this.tileTextures.has(key)) {
                     if (!this.loading.has(key)) {
                         const controller = new AbortController();
                         this.loading.set(key, controller);
-                        
+
                         const source = this.tileSourceProvider(x, y, effectiveZoom);
 
                         const handleTexture = (tex: WebGLTexture, urlOrKey?: string) => {
                             if (this.loading.has(key)) { // 检查是否已被取消
-                                this.tileTextures.set(key, { 
-                                    texture: tex, 
+                                this.tileTextures.set(key, {
+                                    texture: tex,
                                     lastUsedTime: performance.now(),
-                                    url: urlOrKey 
+                                    url: urlOrKey
                                 });
 
                                 // 如果没有 urlOrKey，说明是未经过 TextureManager 缓存的原始 WebGLTexture
@@ -208,7 +210,7 @@ export class TileLayer extends Node {
                             // Promise 模式
                             source.then(result => {
                                 if (controller.signal.aborted) return;
-                                
+
                                 if (result instanceof HTMLCanvasElement || (result as any).tagName === 'CANVAS') {
                                     const tex = TextureManager.createTextureFromSource(gl, result as HTMLCanvasElement);
                                     if (tex) handleTexture(tex);
@@ -236,7 +238,7 @@ export class TileLayer extends Node {
                 const tileInfo = this.tileTextures.get(key)!;
                 tileInfo.lastUsedTime = performance.now(); // 更新最后使用时间
                 const texture = tileInfo.texture;
-                
+
                 // --- 计算瓦片的世界坐标 (用于批处理) ---
                 // 瓦片在局部空间的位置
                 const posX = x * renderTileSize;
@@ -249,11 +251,11 @@ export class TileLayer extends Node {
                 // Matrix: [a, b, 0, c, d, 0, tx, ty, 1]
                 // x' = x*a + y*c + tx
                 // y' = x*b + y*d + ty
-                
+
                 const m00 = wm[0], m01 = wm[1];
                 const m10 = wm[3], m11 = wm[4];
                 const m20 = wm[6], m21 = wm[7];
-                
+
                 const v = TileLayer.sharedVertices;
 
                 // TL (posX, posY)
@@ -310,10 +312,10 @@ export class TileLayer extends Node {
 
         // 删除最旧的瓦片
         const toRemoveCount = Math.max(20, this.tileTextures.size - TileLayer.MAX_TILES + 10); // 确保每次至少删除一些
-        
+
         for (let i = 0; i < toRemoveCount && i < entries.length; i++) {
             const [key, info] = entries[i];
-            
+
             if (info.url) {
                 // 如果是 URL 加载的，通知 TextureManager 释放
                 TextureManager.disposeTexture(gl, info.url);
@@ -322,7 +324,7 @@ export class TileLayer extends Node {
                 gl.deleteTexture(info.texture);
                 MemoryTracker.getInstance().untrack(`Tile_${key}`);
             }
-            
+
             this.tileTextures.delete(key);
         }
     }
@@ -339,7 +341,7 @@ export class TileLayer extends Node {
 
         // 2. 释放所有已缓存的纹理
         const gl = this._gl || (Renderer as any).instance?.gl;
-        
+
         if (gl) {
             for (const info of this.tileTextures.values()) {
                 if (info.url) {
@@ -349,7 +351,7 @@ export class TileLayer extends Node {
                 }
             }
         }
-        
+
         this.tileTextures.clear();
         MemoryTracker.getInstance().untrackByPrefix('Tile_');
 

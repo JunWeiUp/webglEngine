@@ -44,26 +44,26 @@ export class Node {
     /** 宽度 (用于包围盒/点击检测) */
     private _width: number = 0;
     public get width(): number { return this._width; }
-    public set width(value: number) {
-        if (this._width !== value) {
-            this.invalidateWithSelfBounds(() => {
-                this._width = value;
-                this.markTransformDirty();
-            });
-        }
-    }
+    // public set width(value: number) {
+    //     if (this._width !== value) {
+    //         this.invalidateWithSelfBounds(() => {
+    //             this._width = value;
+    //             this.markTransformDirty();
+    //         });
+    //     }
+    // }
 
     /** 高度 (用于包围盒/点击检测) */
     private _height: number = 0;
     public get height(): number { return this._height; }
-    public set height(value: number) {
-        if (this._height !== value) {
-            this.invalidateWithSelfBounds(() => {
-                this._height = value;
-                this.markTransformDirty();
-            });
-        }
-    }
+    // public set height(value: number) {
+    //     if (this._height !== value) {
+    //         this.invalidateWithSelfBounds(() => {
+    //             this._height = value;
+    //             this.markTransformDirty();
+    //         });
+    //     }
+    // }
 
     /** 世界坐标系下的 AABB 包围盒 (扁平化存储以节省内存) */
     public worldMinX: number = Infinity;
@@ -218,36 +218,36 @@ export class Node {
     }
 
     get x(): number { return this.transform.x; }
-    set x(value: number) {
-        if (this.transform.x !== value) {
-            this.markTransformDirty();
-            this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
-        }
-    }
+    // set x(value: number) {
+    //     if (this.transform.x !== value) {
+    //         this.markTransformDirty();
+    //         this.invalidateWithSelfBounds(() => this.transform.setPosition(value, this.y));
+    //     }
+    // }
 
     get y(): number { return this.transform.y; }
-    set y(value: number) {
-        if (this.transform.y !== value) {
-            this.markTransformDirty();
-            this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
-        }
-    }
+    // set y(value: number) {
+    //     if (this.transform.y !== value) {
+    //         this.markTransformDirty();
+    //         this.invalidateWithSelfBounds(() => this.transform.setPosition(this.x, value));
+    //     }
+    // }
 
     get scaleX(): number { return this.transform.scaleX; }
-    set scaleX(value: number) {
-        if (this.transform.scaleX !== value) {
-            this.markTransformDirty();
-            this.invalidateWithSelfBounds(() => this.transform.setScale(value, this.scaleY));
-        }
-    }
+    // set scaleX(value: number) {
+    //     if (this.transform.scaleX !== value) {
+    //         this.markTransformDirty();
+    //         this.invalidateWithSelfBounds(() => this.transform.setScale(value, this.scaleY));
+    //     }
+    // }
 
     get scaleY(): number { return this.transform.scaleY; }
-    set scaleY(value: number) {
-        if (this.transform.scaleY !== value) {
-            this.markTransformDirty();
-            this.invalidateWithSelfBounds(() => this.transform.setScale(this.scaleX, value));
-        }
-    }
+    // set scaleY(value: number) {
+    //     if (this.transform.scaleY !== value) {
+    //         this.markTransformDirty();
+    //         this.invalidateWithSelfBounds(() => this.transform.setScale(this.scaleX, value));
+    //     }
+    // }
 
     /**
      * 同时设置位置和缩放，减少冗余计算和失效通知
@@ -263,6 +263,22 @@ export class Node {
 
         this.invalidateWithSelfBounds(() => {
             trans.setTransform(x, y, scaleX, scaleY);
+        });
+    }
+
+    /**
+     * 设置位置，减少冗余计算和失效通知
+     */
+    public setPosition(x: number, y: number) {
+        const trans = this.transform;
+        if (trans.x === x && trans.y === y) {
+            return;
+        }
+
+        this.markTransformDirty();
+
+        this.invalidateWithSelfBounds(() => {
+            trans.setPosition(x, y);
         });
     }
 

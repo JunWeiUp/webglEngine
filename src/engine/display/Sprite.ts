@@ -74,14 +74,16 @@ export class Sprite extends Node {
             // 初始时不立即加载，等待第一次渲染时按需加载
         } else if (textureOrUrl instanceof Texture) {
             this._texture = textureOrUrl;
-            this.width = textureOrUrl.width;
-            this.height = textureOrUrl.height;
+            // this.width = textureOrUrl.width;
+            // this.height = textureOrUrl.height;
+            this.set(this.x, this.y, textureOrUrl.width, textureOrUrl.height);
         } else {
             // 默认情况下 _texture 为 null，getter 会返回共享的白色纹理
             // 确保全局白色纹理已创建
             TextureManager.createWhiteTexture(gl);
-            this.width = 100;
-            this.height = 100;
+            // this.width = 100;
+            // this.height = 100;
+            this.set(this.x, this.y, 100, 100);
         }
     }
 
@@ -116,8 +118,8 @@ export class Sprite extends Node {
             TextureManager.loadTexture(renderer.gl, this._textureUrl).then(tex => {
                 this._texture = tex;
                 this._isLoading = false;
-                if (this.width === 0) this.width = tex.width;
-                if (this.height === 0) this.height = tex.height;
+                if (this.width === 0) this.set(this.x, this.y, tex.width, tex.height);
+                if (this.height === 0) this.set(this.x, this.y, this.width, tex.height);
                 this.invalidate();
             }).catch(() => {
                 this._isLoading = false;

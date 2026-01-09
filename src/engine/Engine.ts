@@ -67,7 +67,7 @@ export class Engine {
         this.interaction = new InteractionManager(this, this.renderer, this.scene, this.auxLayer);
 
         // 初始化调试用的大纲视图
-        this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer);
+        this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer, this.interaction);
 
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {

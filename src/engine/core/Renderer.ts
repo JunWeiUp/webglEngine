@@ -17,7 +17,7 @@ export class Renderer {
 
     // 空间索引
     private spatialIndex: RBush<NodeSpatialItem> = new RBush();
-    private allNodesInIndex: Set<Node> = new Set();
+    // private allNodesInIndex: Set<Node> = new Set();
 
     private shaderProgram: WebGLProgram | null = null;
 
@@ -408,7 +408,7 @@ void main() {
                 if (node.spatialItem) {
                     this.spatialIndex.remove(node.spatialItem);
                 } else {
-                    this.allNodesInIndex.add(node);
+                    // this.allNodesInIndex.add(node);
                 }
 
                 // 2. 更新世界 AABB (这会触发回溯计算变换矩阵)

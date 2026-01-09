@@ -10,6 +10,7 @@ interface OutlineItem {
 
 import { Renderer } from '../core/Renderer';
 import { vec2 } from 'gl-matrix';
+import { InteractionManager } from '../events/InteractionManager';
 
 export class OutlineView {
     private container: HTMLElement;
@@ -20,6 +21,7 @@ export class OutlineView {
     private rootNode: Node;
     private auxLayer: AuxiliaryLayer;
     private renderer: Renderer;
+    private interaction: InteractionManager;
     
     // Flattened list of visible nodes (not collapsed by parent)
     private flattenList: OutlineItem[] = [];
@@ -34,10 +36,11 @@ export class OutlineView {
     // Key: Node, Value: DOM Element currently rendered
     private renderedNodeMap: Map<Node, HTMLElement> = new Map();
 
-    constructor(rootNode: Node, auxLayer: AuxiliaryLayer, renderer: Renderer) {
+    constructor(rootNode: Node, auxLayer: AuxiliaryLayer, renderer: Renderer, interaction: InteractionManager) {
         this.rootNode = rootNode;
         this.auxLayer = auxLayer;
         this.renderer = renderer;
+        this.interaction = interaction;
         
         // Default expand root
         this.expandedNodes.add(rootNode);
@@ -289,8 +292,15 @@ export class OutlineView {
             e.stopPropagation();
             this.auxLayer.selectedNode = item.node;
             this.rootNode.invalidate();
-            this.updateHighlight();
-            this.focusNode(item.node);
+            
+            // 触发交互管理器的选中变化回调，确保其他组件同步
+            if (this.interaction.onSelectionChange) {
+                this.interaction.onSelectionChange();
+            } else {
+                this.updateHighlight();
+            }
+            
+            this.interaction.focusNode(item.node);
         };
 
         // Hover
@@ -363,63 +373,6 @@ export class OutlineView {
         if (targetTop < scrollTop || targetTop > scrollTop + viewportHeight - this.itemHeight) {
             // 滚动到该位置 (居中)
             this.scrollContainer.scrollTop = targetTop - viewportHeight / 2 + this.itemHeight / 2;
-        }
-    }
-
-    /**
-     * 如果节点不在视图区域内，平移画布使其居中
-     */
-    private focusNode(node: Node) {
-        // 1. 获取 Canvas 尺寸 (视图大小)
-        const canvas = this.renderer.ctx.canvas;
-        const viewportWidth = canvas.width;
-        const viewportHeight = canvas.height;
-
-        // 2. 计算节点在屏幕空间的包围盒
-        // 使用节点的四个角转换到屏幕空间
-        const corners = [
-            vec2.fromValues(0, 0),
-            vec2.fromValues(node.width, 0),
-            vec2.fromValues(node.width, node.height),
-            vec2.fromValues(0, node.height)
-        ];
-
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-        for (const p of corners) {
-            const screenP = vec2.create();
-            vec2.transformMat3(screenP, p, node.transform.worldMatrix);
-            
-            minX = Math.min(minX, screenP[0]);
-            minY = Math.min(minY, screenP[1]);
-            maxX = Math.max(maxX, screenP[0]);
-            maxY = Math.max(maxY, screenP[1]);
-        }
-
-        // 3. 检查是否完全在视图内
-        // 留一点边距 (padding)
-        const padding = 20;
-        const isInside = (minX >= padding) && (maxX <= viewportWidth - padding) &&
-                         (minY >= padding) && (maxY <= viewportHeight - padding);
-
-        if (!isInside) {
-            // 4. 计算需要移动的偏移量
-            const nodeCenterX = (minX + maxX) / 2;
-            const nodeCenterY = (minY + maxY) / 2;
-
-            const viewportCenterX = viewportWidth / 2;
-            const viewportCenterY = viewportHeight / 2;
-
-            const dx = viewportCenterX - nodeCenterX;
-            const dy = viewportCenterY - nodeCenterY;
-
-            // 5. 应用平移到根节点 (Scene)
-            // 注意：Scene 是根节点，直接修改 position 即可平移整个世界
-            // 累加位移
-            this.rootNode.x += dx;
-            this.rootNode.y += dy;
-            this.rootNode.transform.dirty = true;
-            this.rootNode.invalidate();
         }
     }
 }

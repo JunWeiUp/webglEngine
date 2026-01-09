@@ -184,14 +184,14 @@ export class AuxiliaryLayer {
     private getGlobalScale(node: Node, viewMatrix: mat3): number {
         // Approximate global scale including view matrix
         const m = mat3.create();
-        mat3.multiply(m, viewMatrix, node.transform.worldMatrix);
+        mat3.multiply(m, viewMatrix, node.getWorldMatrix());
         return Math.hypot(m[0], m[1]);
     }
 
     private getScreenBounds(node: Node, viewMatrix: mat3): { minX: number, minY: number, maxX: number, maxY: number } | null {
         // Combined matrix: view * world
         const combined = mat3.create();
-        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+        mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
         // Transform 4 corners of the node to screen space
         // Node local corners: (0,0), (w,0), (w,h), (0,h)
@@ -218,7 +218,7 @@ export class AuxiliaryLayer {
 
     public getHandles(node: Node, viewMatrix: mat3): Handle[] {
         const combined = mat3.create();
-        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+        mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
         const w = node.width;
         const h = node.height;
@@ -286,7 +286,7 @@ export class AuxiliaryLayer {
 
         // Combined matrix: view * world
         const combined = mat3.create();
-        mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
+        mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
         const corners = [
             vec2.fromValues(0, 0),

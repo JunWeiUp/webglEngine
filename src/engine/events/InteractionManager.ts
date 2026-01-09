@@ -57,6 +57,37 @@ export class InteractionManager {
     }
 
     /**
+     * 平移相机使节点在视图中居中
+     */
+    public focusNode(node: Node) {
+        // 1. 获取 Canvas 尺寸
+        const canvas = this.renderer.ctx.canvas;
+        const viewportWidth = canvas.width;
+        const viewportHeight = canvas.height;
+
+        // 2. 计算节点在世界空间的中点
+        // 使用 getWorldMatrix() 确保获取到最新的矩阵
+        const worldMatrix = node.getWorldMatrix();
+        const localCenter = vec2.fromValues(node.width / 2, node.height / 2);
+        const worldCenter = vec2.create();
+        vec2.transformMat3(worldCenter, localCenter, worldMatrix);
+        
+        const nodeCenterX = worldCenter[0];
+        const nodeCenterY = worldCenter[1];
+
+        // 3. 计算目标相机位置
+        // 目标：让节点的世界坐标在经过相机变换后，处于屏幕中心
+        // 屏幕中心 = (worldPos * scale) + cameraPos
+        // cameraPos = 屏幕中心 - (worldPos * scale)
+        this.cameraX = (viewportWidth / 2) - (nodeCenterX * this.cameraScale);
+        this.cameraY = (viewportHeight / 2) - (nodeCenterY * this.cameraScale);
+
+        // 4. 应用变换
+        this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
+        this.scene.invalidate();
+    }
+
+    /**
      * 初始化 DOM 事件监听器
      */
     private initListeners() {
@@ -142,7 +173,7 @@ export class InteractionManager {
                 // 进一步精确检测：将世界坐标转换到节点的局部坐标系
                 const localPos = vec2.create();
                 const invertWorld = mat3.create();
-                mat3.invert(invertWorld, node.transform.worldMatrix);
+                mat3.invert(invertWorld, node.getWorldMatrix());
                 vec2.transformMat3(localPos, worldPos, invertWorld);
 
                 // 检查是否在节点的矩形范围内 (0, 0) 到 (width, height)
@@ -238,26 +269,36 @@ export class InteractionManager {
             const sXLines = [sibling.x, sibling.x + sibling.width / 2, sibling.x + sibling.width];
             const sYLines = [sibling.y, sibling.y + sibling.height / 2, sibling.y + sibling.height];
 
+            const siblingMatrix = sibling.getWorldMatrix();
             sXLines.forEach((lx, i) => {
-                const worldX = sibling.transform.worldMatrix[6] + (i * sibling.width / 2);
-                xTargets.push({ value: lx, worldX });
+                const localPos = vec2.fromValues(i * sibling.width / 2, 0);
+                const worldPos = vec2.create();
+                vec2.transformMat3(worldPos, localPos, siblingMatrix);
+                xTargets.push({ value: lx, worldX: worldPos[0] });
             });
             sYLines.forEach((ly, i) => {
-                const worldY = sibling.transform.worldMatrix[7] + (i * sibling.height / 2);
-                yTargets.push({ value: ly, worldY });
+                const localPos = vec2.fromValues(0, i * sibling.height / 2);
+                const worldPos = vec2.create();
+                vec2.transformMat3(worldPos, localPos, siblingMatrix);
+                yTargets.push({ value: ly, worldY: worldPos[1] });
             });
         }
 
         // 2. Add parent boundaries as targets (0, center, size)
         const pXLines = [0, parent.width / 2, parent.width];
         const pYLines = [0, parent.height / 2, parent.height];
+        const parentMatrix = parent.getWorldMatrix();
         pXLines.forEach((lx, i) => {
-            const worldX = parent.transform.worldMatrix[6] + (i * parent.width / 2);
-            xTargets.push({ value: lx, worldX });
+            const localPos = vec2.fromValues(i * parent.width / 2, 0);
+            const worldPos = vec2.create();
+            vec2.transformMat3(worldPos, localPos, parentMatrix);
+            xTargets.push({ value: lx, worldX: worldPos[0] });
         });
         pYLines.forEach((ly, i) => {
-            const worldY = parent.transform.worldMatrix[7] + (i * parent.height / 2);
-            yTargets.push({ value: ly, worldY });
+            const localPos = vec2.fromValues(0, i * parent.height / 2);
+            const worldPos = vec2.create();
+            vec2.transformMat3(worldPos, localPos, parentMatrix);
+            yTargets.push({ value: ly, worldY: worldPos[1] });
         });
 
         let snappedX = targetX;
@@ -582,7 +623,7 @@ export class InteractionManager {
                 const parent = node.parent;
                 if (parent) {
                     const invertParent = mat3.create();
-                    mat3.invert(invertParent, parent.transform.worldMatrix);
+                    mat3.invert(invertParent, parent.getWorldMatrix());
                     const m = invertParent;
 
                     // Convert total world delta to local delta for this node
@@ -601,8 +642,7 @@ export class InteractionManager {
                         newY = snapped.y;
                     }
 
-                    node.x = newX;
-                    node.y = newY;
+                    node.setPosition(newX, newY);
                 }
             }
 
