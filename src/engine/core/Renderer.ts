@@ -85,8 +85,25 @@ export class Renderer {
     /** FPS 统计上次更新时间 */
     private lastFPSUpdateTime: number = 0;
     private _isBatchUpdatingSpatial: boolean = false;
+    private _structureDirty: boolean = true;
     /** 当前帧全局时间戳 (ms) */
     public static currentTime: number = 0;
+
+    /**
+     * 标记场景结构已改变，需要重新计算渲染顺序
+     */
+    public markStructureDirty() {
+        this._structureDirty = true;
+    }
+
+    private _nextRenderOrder: number = 0;
+    private updateRenderOrder(node: Node) {
+        node.renderOrder = this._nextRenderOrder++;
+        const children = node.children;
+        for (let i = 0; i < children.length; i++) {
+            this.updateRenderOrder(children[i]);
+        }
+    }
 
     /**
      * 初始化渲染器
@@ -446,6 +463,14 @@ void main() {
         // 1. 同步空间索引 (增量更新)
         const t0 = performance.now();
         this.syncSpatialIndex(scene);
+        
+        // 如果结构发生变化，重新计算全局渲染顺序
+        if (this._structureDirty) {
+            this._nextRenderOrder = 0;
+            this.updateRenderOrder(scene);
+            this._structureDirty = false;
+        }
+        
         this.stats.times.nodeTransform = performance.now() - t0;
 
         // 2. 设置 WebGL 状态
@@ -468,8 +493,8 @@ void main() {
         const queryBox = this.getViewportWorldAABB(dirtyRect);
         const visibleItems = this.spatialIndex.search(queryBox);
         
-        // 4. 排序：确保渲染顺序（基于 ID，代表创建顺序）
-        visibleItems.sort((a, b) => a.node.id - b.node.id);
+        // 4. 排序：确保渲染顺序（基于 renderOrder，反映场景树结构）
+        visibleItems.sort((a, b) => a.node.renderOrder - b.node.renderOrder);
 
         // 5. 渲染可见节点
         for (const item of visibleItems) {
@@ -533,7 +558,7 @@ void main() {
         const visibleItems = this.spatialIndex.search(queryBox);
         
         // 2. 排序
-        visibleItems.sort((a, b) => a.node.id - b.node.id);
+        visibleItems.sort((a, b) => a.node.renderOrder - b.node.renderOrder);
 
         // 3. 渲染
         for (const item of visibleItems) {

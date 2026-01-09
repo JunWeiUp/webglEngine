@@ -71,6 +71,9 @@ export class Node {
     public worldMaxX: number = -Infinity;
     public worldMaxY: number = -Infinity;
 
+    /** 渲染顺序 (由 Renderer 计算，反映场景树的前序遍历顺序) */
+    public renderOrder: number = 0;
+
     /** 空间索引数据项 (RBush 使用) */
     public spatialItem: NodeSpatialItem | null = null;
 
@@ -385,6 +388,11 @@ export class Node {
         if (!first) {
             this.invalidate(); // 结构变化需要重绘
         }
+
+        // 通知渲染器结构已改变
+        if (Renderer.instance) {
+            Renderer.instance.markStructureDirty();
+        }
     }
 
     /**
@@ -406,6 +414,11 @@ export class Node {
             child.spatialDirty = true; 
             
             this.invalidate(); // 结构变化需要重绘
+
+            // 通知渲染器结构已改变
+            if (Renderer.instance) {
+                Renderer.instance.markStructureDirty();
+            }
         }
     }
 
