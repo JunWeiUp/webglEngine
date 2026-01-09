@@ -64,7 +64,7 @@ export class TileLayer extends Node {
         this.tileSourceProvider = tileSourceProvider;
         this.baseZoom = baseZoom;
 
-        // 设置一个巨大的包围盒，确保 TileLayer 始终在 RBush 空间索引中可见
+        // 设置一个巨大的包围盒，确保 TileLayer 始终在空间索引中可见
         // 这样渲染器才能在空间查询时检索到它
         // this.width = 20000000; // 2千万像素，足够覆盖常规应用场景
         // this.height = 20000000;

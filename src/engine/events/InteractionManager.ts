@@ -71,7 +71,7 @@ export class InteractionManager {
         const localCenter = vec2.fromValues(node.width / 2, node.height / 2);
         const worldCenter = vec2.create();
         vec2.transformMat3(worldCenter, localCenter, worldMatrix);
-        
+
         const nodeCenterX = worldCenter[0];
         const nodeCenterY = worldCenter[1];
 
@@ -157,19 +157,26 @@ export class InteractionManager {
      * 深度优先遍历，从后往前查找 (后渲染的先检测)
      */
     private hitTest(node: Node, worldPos: vec2): Node | null {
-        // 1. 递归检测子节点 (后添加的子节点在数组末尾，先渲染，因此先检测)
-        const children = node.children;
-        for (let i = children.length - 1; i >= 0; i--) {
-            const hit = this.hitTest(children[i], worldPos);
+        // 1. 优先递归检测子节点
+        if (node.childSpatialIndex) {
+            const hit = node.childSpatialIndex.hitTestRecursive(node.getWorldMatrix(), worldPos);
             if (hit) return hit;
+        } else {
+            const children = node.children;
+            for (let i = children.length - 1; i >= 0; i--) {
+                const hit = this.hitTest(children[i], worldPos);
+                if (hit) return hit;
+            }
         }
 
         // 2. 检测当前节点
         if (node.interactive && node !== this.scene) {
             // 使用 AABB 包围盒进行快速初步检测
-            if (worldPos[0] >= node.worldMinX && worldPos[0] <= node.worldMaxX &&
-                worldPos[1] >= node.worldMinY && worldPos[1] <= node.worldMaxY) {
-                
+            const bounds = node.getBounds(false);
+            if (bounds && 
+                worldPos[0] >= bounds.x && worldPos[0] <= bounds.x + bounds.width &&
+                worldPos[1] >= bounds.y && worldPos[1] <= bounds.y + bounds.height) {
+
                 // 进一步精确检测：将世界坐标转换到节点的局部坐标系
                 const localPos = vec2.create();
                 const invertWorld = mat3.create();
@@ -215,7 +222,7 @@ export class InteractionManager {
      */
     private hitTestHandles(pos: vec2): { node: Node, handle: any } | null {
         if (this.auxLayer.selectedNodes.size !== 1) return null;
-        
+
         const node = this.auxLayer.selectedNode!;
         const handles = this.auxLayer.getHandles(node, this.renderer.getViewMatrix());
         const size = (this.auxLayer.constructor as any).HANDLE_SIZE || 8;
@@ -254,7 +261,6 @@ export class InteractionManager {
         const parent = node.parent;
         if (!parent) return { x: targetX, y: targetY };
 
-        const siblings = parent.children.filter(c => c !== node && c.interactive);
         const scale = this.cameraScale;
         const worldThreshold = 5 / scale;
 
@@ -264,6 +270,23 @@ export class InteractionManager {
         const xTargets: { value: number, worldX: number }[] = [];
         const yTargets: { value: number, worldY: number }[] = [];
 
+        // --- 性能优化：使用空间索引查询附近的兄弟节点 ---
+        let siblings: Node[];
+        if (parent.childSpatialIndex) {
+            // 查询范围：当前节点目标位置附近的 AABB
+            // 注意：这里假设父节点的缩放为 1，如果父节点有缩放，threshold 可能需要进一步换算
+            const queryRect: Rect = {
+                x: targetX - worldThreshold,
+                y: targetY - worldThreshold,
+                width: node.width + worldThreshold * 2,
+                height: node.height + worldThreshold * 2
+            };
+            siblings = parent.childSpatialIndex.search(queryRect).filter(c => c !== node && c.interactive);
+        } else {
+            // 降级方案：全量过滤 (百万级节点下会卡顿)
+            siblings = parent.children.filter(c => c !== node && c.interactive);
+        }
+
         // 1. Add siblings as targets
         for (const sibling of siblings) {
             const sXLines = [sibling.x, sibling.x + sibling.width / 2, sibling.x + sibling.width];
@@ -271,15 +294,13 @@ export class InteractionManager {
 
             const siblingMatrix = sibling.getWorldMatrix();
             sXLines.forEach((lx, i) => {
-                const localPos = vec2.fromValues(i * sibling.width / 2, 0);
-                const worldPos = vec2.create();
-                vec2.transformMat3(worldPos, localPos, siblingMatrix);
+                const worldPos = vec2.fromValues(i * sibling.width / 2, 0);
+                vec2.transformMat3(worldPos, worldPos, siblingMatrix);
                 xTargets.push({ value: lx, worldX: worldPos[0] });
             });
             sYLines.forEach((ly, i) => {
-                const localPos = vec2.fromValues(0, i * sibling.height / 2);
-                const worldPos = vec2.create();
-                vec2.transformMat3(worldPos, localPos, siblingMatrix);
+                const worldPos = vec2.fromValues(0, i * sibling.height / 2);
+                vec2.transformMat3(worldPos, worldPos, siblingMatrix);
                 yTargets.push({ value: ly, worldY: worldPos[1] });
             });
         }
@@ -340,6 +361,7 @@ export class InteractionManager {
      * 鼠标按下事件处理
      */
     private onMouseDown(e: MouseEvent) {
+        this.engine.recordInteractionTime();
         const pos = this.getMousePos(e);
         const worldPos = this.getWorldMousePos(pos);
         this.lastMousePos = pos;
@@ -371,7 +393,7 @@ export class InteractionManager {
             if (this.auxLayer.selectedNodes.has(hit)) {
                 this.auxLayer.draggingNode = hit;
                 vec2.copy(this.auxLayer.dragProxyPos, worldPos);
-                
+
                 // 记录所有选中节点的起始状态
                 this.auxLayer.selectedNodes.forEach(node => {
                     this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height });
@@ -381,7 +403,7 @@ export class InteractionManager {
                 this.auxLayer.selectedNodes.add(hit);
                 this.auxLayer.draggingNode = hit;
                 vec2.copy(this.auxLayer.dragProxyPos, worldPos);
-                
+
                 this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height });
                 if (this.onSelectionChange) this.onSelectionChange();
             }
@@ -434,6 +456,7 @@ export class InteractionManager {
      * 鼠标移动事件处理
      */
     private onMouseMove(e: MouseEvent) {
+        this.engine.recordInteractionTime();
         const pos = this.getMousePos(e);
         const worldPos = this.getWorldMousePos(pos);
         const deltaX = pos[0] - this.lastMousePos[0];
@@ -459,7 +482,7 @@ export class InteractionManager {
         if (this.auxLayer.activeHandle && this.auxLayer.selectedNode) {
             const node = this.auxLayer.selectedNode;
             const handleType = this.auxLayer.activeHandle;
-            
+
             // Keep the resize cursor while dragging
             this.renderer.ctx.canvas.style.cursor = this.getCursorForHandle(handleType);
 
@@ -505,20 +528,36 @@ export class InteractionManager {
             // Apply snapping for resize
             this.auxLayer.alignmentLines = [];
             if (parentNode) {
-                const siblings = parentNode.children.filter(c => c !== node && c.interactive);
                 const scale = this.cameraScale;
                 const worldThreshold = 5 / scale;
                 const parentWM = parentNode.transform.worldMatrix;
+
+                // --- 性能优化：使用空间索引查询附近的兄弟节点 ---
+                let siblings: Node[];
+                if (parentNode.childSpatialIndex) {
+                    const queryRect: Rect = {
+                        x: newX - worldThreshold,
+                        y: newY - worldThreshold,
+                        width: newW + worldThreshold * 2,
+                        height: newH + worldThreshold * 2
+                    };
+                    siblings = parentNode.childSpatialIndex.search(queryRect).filter(c => c !== node && c.interactive);
+                } else {
+                    siblings = parentNode.children.filter(c => c !== node && c.interactive);
+                }
 
                 // Vertical snapping (for X changes)
                 if (handleType.includes('e') || handleType.includes('w')) {
                     // Calculate current world X of the handle
                     const localX = handleType.includes('e') ? newX + newW : newX;
                     const worldXLine = localX * parentWM[0] + parentWM[6];
-                    
+
                     let foundX = false;
                     for (const sibling of siblings) {
-                        const sXLines = [sibling.worldMinX, (sibling.worldMinX + sibling.worldMaxX) / 2, sibling.worldMaxX];
+                        const sBounds = sibling.getBounds(false);
+                        if (!sBounds) continue;
+
+                        const sXLines = [sBounds.x, (sBounds.x + sBounds.x + sBounds.width) / 2, sBounds.x + sBounds.width];
                         for (let j = 0; j < 3; j++) {
                             if (Math.abs(worldXLine - sXLines[j]) < worldThreshold) {
                                 const deltaWorld = sXLines[j] - worldXLine;
@@ -545,7 +584,10 @@ export class InteractionManager {
 
                     let foundY = false;
                     for (const sibling of siblings) {
-                        const sYLines = [sibling.worldMinY, (sibling.worldMinY + sibling.worldMaxY) / 2, sibling.worldMaxY];
+                        const sBounds = sibling.getBounds(false);
+                        if (!sBounds) continue;
+
+                        const sYLines = [sBounds.y, (sBounds.y + sBounds.y + sBounds.height) / 2, sBounds.y + sBounds.height];
                         for (let j = 0; j < 3; j++) {
                             if (Math.abs(worldYLine - sYLines[j]) < worldThreshold) {
                                 const deltaWorld = sYLines[j] - worldYLine;
@@ -570,6 +612,7 @@ export class InteractionManager {
 
             this.lastMousePos = pos;
             this.scene.invalidate();
+
             return;
         }
 
@@ -615,7 +658,6 @@ export class InteractionManager {
             // Calculate total world delta since mouse down
             const totalWorldDeltaX = worldPos[0] - this.dragStartMousePos[0];
             const totalWorldDeltaY = worldPos[1] - this.dragStartMousePos[1];
-
             for (const node of topLevelNodes) {
                 const startState = this.dragStartNodesState.get(node);
                 if (!startState) continue;
@@ -634,6 +676,12 @@ export class InteractionManager {
                     // Logical position
                     let newX = startState.x + localDeltaX;
                     let newY = startState.y + localDeltaY;
+                    // // 3. 计算从交互到渲染完成的全链路耗时
+                    if (this.engine.lastInteractionTime > 0) {
+                        this.renderer.stats.times.interactionToRender = performance.now() - this.engine.lastInteractionTime;
+                        // 处理完成后重置，避免在没有交互的帧中重复计算（如果是 alwaysRender 模式）
+                        this.engine.lastInteractionTime = 0;
+                    }
 
                     // Apply snapping to the logical position
                     if (topLevelNodes.length === 1) {
@@ -643,8 +691,10 @@ export class InteractionManager {
                     }
 
                     node.setPosition(newX, newY);
+
                 }
             }
+
 
             vec2.copy(this.auxLayer.dragProxyPos, worldPos);
 
@@ -681,6 +731,8 @@ export class InteractionManager {
             needsRender = true;
         }
 
+
+
         if (needsRender) {
             this.scene.invalidate();
         }
@@ -698,13 +750,31 @@ export class InteractionManager {
 
     private boxSelect(minX: number, minY: number, maxX: number, maxY: number) {
         const selectionRect: Rect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-        this._recursiveBoxSelect(this.scene, selectionRect);
+
+        // 优先使用分层空间索引进行框选
+        if (this.scene.childSpatialIndex) {
+            const results: Node[] = [];
+            this.scene.childSpatialIndex.queryRecursive(
+                mat3.create(), // 框选是在世界空间进行的，传入单位矩阵作为视图
+                this.scene.getWorldMatrix(),
+                selectionRect,
+                results
+            );
+            for (const node of results) {
+                if (node.interactive && node !== this.scene) {
+                    this.auxLayer.selectedNodes.add(node);
+                }
+            }
+        } else {
+            this._recursiveBoxSelect(this.scene, selectionRect);
+        }
     }
 
     private _recursiveBoxSelect(node: Node, selectionRect: Rect) {
-        if (node.worldMinX !== Infinity) {
-            if (selectionRect.x > node.worldMaxX || selectionRect.x + selectionRect.width < node.worldMinX ||
-                selectionRect.y > node.worldMaxY || selectionRect.y + selectionRect.height < node.worldMinY) {
+        const bounds = node.getBounds(false);
+        if (bounds) {
+            if (selectionRect.x > bounds.x + bounds.width || selectionRect.x + selectionRect.width < bounds.x ||
+                selectionRect.y > bounds.y + bounds.height || selectionRect.y + selectionRect.height < bounds.y) {
                 return;
             }
         }
@@ -740,9 +810,9 @@ export class InteractionManager {
             const target = this.auxLayer.dragTargetNode;
             if (target) {
                 const topLevelNodes = this.getTopLevelSelectedNodes();
-                
-                // 开启批量模式，避免重挂载过程中反复更新 RBush
-                this.renderer.beginSpatialBatch();
+
+                // 开启批量模式，避免重挂载过程中反复更新空间索引
+                if (this.renderer) this.renderer.markStructureDirty();
 
                 for (const draggingNode of topLevelNodes) {
                     // 1. 记录当前的世界坐标
@@ -758,12 +828,10 @@ export class InteractionManager {
                     mat3.invert(invertParent, target.getWorldMatrix());
                     const newLocal = vec2.create();
                     vec2.transformMat3(newLocal, worldPos, invertParent);
-                    
+
                     // 使用 setTransform 减少失效调用
                     draggingNode.setTransform(newLocal[0], newLocal[1], draggingNode.scaleX, draggingNode.scaleY);
                 }
-
-                this.renderer.endSpatialBatch();
 
                 if (this.onStructureChange) this.onStructureChange();
             }
@@ -783,6 +851,7 @@ export class InteractionManager {
     }
 
     private onWheel(e: WheelEvent) {
+        this.engine.recordInteractionTime();
         e.preventDefault();
         const isZoom = e.ctrlKey || e.deltaMode !== 0;
         if (isZoom) {

@@ -6,7 +6,7 @@ import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import { PerfHUD } from './ui/PerfHUD';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
-import { TextureManager } from './utils/TextureManager';
+import { MatrixSpatialIndex } from './core/MatrixSpatialIndex';
 
 /**
  * 引擎入口类
@@ -34,8 +34,10 @@ export class Engine {
 
     // 脏矩形管理
     private dirtyRect: Rect | null = null;
+    private _dirtyCount: number = 0; // 脏矩形计数，用于性能阈值控制
     private fullInvalidate: boolean = true; // 默认第一帧全屏渲染
     private sceneDirty: boolean = true; // WebGL 场景是否变脏
+    public lastInteractionTime: number = 0; // 最近一次交互发生的时间戳
 
     private _resizeHandler: () => void;
 
@@ -45,11 +47,12 @@ export class Engine {
      */
     constructor(container: HTMLElement) {
         // 初始化渲染器
-        this.renderer = new Renderer(container);
+        this.renderer = new Renderer(container, this);
 
         // 初始化场景根节点
         this.scene = new Node();
         this.scene.name = "Scene";
+        this.scene.childSpatialIndex = new MatrixSpatialIndex();
 
         // 绑定场景失效回调，触发渲染
         this.scene.onInvalidate = (rect?: Rect) => {
@@ -117,12 +120,19 @@ export class Engine {
 
         // 销毁全局管理器
         AtlasManager.getInstance().dispose();
-        
+
         // 注意：TextureManager 是静态类，目前通过场景节点的 dispose 间接清理了它引用的纹理
         // 如果需要彻底清理 TextureManager 缓存，可以添加一个清理方法
-        
+
         // 销毁交互管理器
         this.interaction.dispose();
+    }
+
+    /**
+     * 记录交互发生的时间戳
+     */
+    public recordInteractionTime() {
+        this.lastInteractionTime = performance.now();
     }
 
     /**
@@ -134,10 +144,18 @@ export class Engine {
     }
 
     /**
-     * 更新脏矩形
+     * 更新脏矩形区域
      */
     private updateDirtyRect(rect: Rect) {
         if (this.fullInvalidate) return; // 已经全屏脏了，无需处理
+
+        // 性能优化：如果变脏的区域过多，直接切换为全屏刷新
+        // 合并海量脏矩形的 CPU 开销可能超过直接重绘全屏的 GPU 开销
+        this._dirtyCount++;
+        if (this._dirtyCount > 50) {
+            this.invalidateFull();
+            return;
+        }
 
         // 加上一点 Padding，防止边缘残留 (抗锯齿/纹理过滤溢出/阴影)
         // 增加到 5 像素以应对更极端的情况
@@ -160,6 +178,12 @@ export class Engine {
             this.dirtyRect.y = minY;
             this.dirtyRect.width = maxX - minX;
             this.dirtyRect.height = maxY - minY;
+
+            // 额外优化：如果合并后的矩形已经覆盖了大部分屏幕，直接全屏
+            const canvas = this.renderer.ctx.canvas;
+            if (this.dirtyRect.width > canvas.width * 0.8 && this.dirtyRect.height > canvas.height * 0.8) {
+                this.invalidateFull();
+            }
         } else {
             this.dirtyRect = paddedRect;
         }
@@ -189,6 +213,14 @@ export class Engine {
      * 使用 requestAnimationFrame 进行防抖，确保每帧只渲染一次
      */
     public requestRender() {
+        // console.trace()
+
+        // // 3. 计算从交互到渲染完成的全链路耗时
+        // if (this.lastInteractionTime > 0) {
+        //     this.renderer.stats.times.interactionToRender = performance.now() - this.lastInteractionTime;
+        //     // 处理完成后重置，避免在没有交互的帧中重复计算（如果是 alwaysRender 模式）
+        //     this.lastInteractionTime = 0;
+        // }
         if (this._rafId === null) {
             this._rafId = requestAnimationFrame(() => {
                 // console.log("engine requestAnimationFrame")
@@ -239,5 +271,6 @@ export class Engine {
         this.fullInvalidate = false;
         this.sceneDirty = false;
         this.dirtyRect = null;
+        this._dirtyCount = 0;
     }
 }

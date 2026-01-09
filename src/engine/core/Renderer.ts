@@ -1,12 +1,12 @@
-import { Node, type NodeSpatialItem } from '../display/Node';
+import { Node } from '../display/Node';
 import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from './Rect';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
-import RBush from 'rbush';
+import { MatrixSpatialIndex } from './MatrixSpatialIndex';
+import type { Engine } from '../Engine';
 
 /**
  * 核心渲染器类
- * 负责 WebGL 上下文管理、着色器编译、批处理渲染以及场景树的遍历渲染。
  */
 export class Renderer {
     public gl: WebGL2RenderingContext;
@@ -14,10 +14,6 @@ export class Renderer {
     public ctx: CanvasRenderingContext2D;
     public width: number;
     public height: number;
-
-    // 空间索引
-    private spatialIndex: RBush<NodeSpatialItem> = new RBush();
-    // private allNodesInIndex: Set<Node> = new Set();
 
     private shaderProgram: WebGLProgram | null = null;
 
@@ -44,6 +40,7 @@ export class Renderer {
             hitTest: 0,   // 新增：拾取检测耗时
             boxSelect: 0, // 新增：框选耗时
             nodeTransform: 0, // 新增：节点变换更新耗时
+            interactionToRender: 0, // 新增：从交互到渲染的完整耗时
             total: 0
         },
         times: {
@@ -55,6 +52,7 @@ export class Renderer {
             hitTest: 0,   // 新增：拾取检测耗时
             boxSelect: 0, // 新增：框选耗时
             nodeTransform: 0, // 新增：节点变换更新耗时
+            interactionToRender: 0, // 新增：从交互到渲染的完整耗时
             total: 0
         }
     };
@@ -86,30 +84,19 @@ export class Renderer {
     private lastFPSUpdateTime: number = 0;
     private _isBatchUpdatingSpatial: boolean = false;
     private _structureDirty: boolean = true;
+    private _dirtyNodes: Node[] = []; // 用于 RBush 批量加载
+    private _nodesByOrder: Node[] = []; // 用于超大规模场景的快速排序渲染
+    private _visibleBitset: Uint8Array = new Uint8Array(0); // 用于大规模场景的快速排序
     /** 当前帧全局时间戳 (ms) */
     public static currentTime: number = 0;
-
-    /**
-     * 标记场景结构已改变，需要重新计算渲染顺序
-     */
-    public markStructureDirty() {
-        this._structureDirty = true;
-    }
-
-    private _nextRenderOrder: number = 0;
-    private updateRenderOrder(node: Node) {
-        node.renderOrder = this._nextRenderOrder++;
-        const children = node.children;
-        for (let i = 0; i < children.length; i++) {
-            this.updateRenderOrder(children[i]);
-        }
-    }
+    public engine: Engine;
 
     /**
      * 初始化渲染器
      * @param container 承载 Canvas 的 DOM 容器
      */
-    constructor(container: HTMLElement) {
+    constructor(container: HTMLElement, engine: Engine) {
+        this.engine = engine;
         Renderer.instance = this;
         // 初始化批处理数据
         this.vertexBufferData = new Float32Array(Renderer.MAX_QUADS * 4 * Renderer.VERTEX_SIZE);
@@ -374,70 +361,25 @@ void main() {
     }
 
     /**
-     * 开始批量更新空间索引 (期间会挂起 RBush 插入/删除操作)
+     * 标记场景结构已改变，需要重新计算渲染顺序
      */
-    public beginSpatialBatch() {
-        this._isBatchUpdatingSpatial = true;
+    public markStructureDirty() {
+        this._structureDirty = true;
     }
 
-    /**
-     * 结束批量更新空间索引
-     */
-    public endSpatialBatch() {
-        this._isBatchUpdatingSpatial = false;
-    }
+    private _nextRenderOrder: number = 0;
+    private updateRenderOrder(node: Node) {
+        const order = this._nextRenderOrder++;
+        node.renderOrder = order;
+        this._nodesByOrder[order] = node;
 
-    /**
-     * 同步空间索引 (RBush)
-     * 增量更新场景中发生变换的节点的 AABB
-     */
-    private syncSpatialIndex(node: Node, parentSpatialDirty: boolean = false) {
-        if (this._isBatchUpdatingSpatial) return;
-
-        const isDirty = node.spatialDirty || parentSpatialDirty;
-
-        // 如果子树不脏且当前路径没有脏标记，直接跳过
-        if (!node.subtreeDirty && !isDirty) {
-            return;
-        }
-
-        // 如果节点有尺寸，且空间信息已脏，则更新 RBush
-        if (node.width > 0 && node.height > 0) {
-            if (isDirty || !node.spatialItem) {
-                // 1. 从索引中移除旧条目
-                if (node.spatialItem) {
-                    this.spatialIndex.remove(node.spatialItem);
-                } else {
-                    // this.allNodesInIndex.add(node);
-                }
-
-                // 2. 更新世界 AABB (这会触发回溯计算变换矩阵)
-                node.updateWorldAABB();
-
-                // 3. 创建新条目并插入索引
-                node.spatialItem = {
-                    minX: node.worldMinX,
-                    minY: node.worldMinY,
-                    maxX: node.worldMaxX,
-                    maxY: node.worldMaxY,
-                    node: node
-                };
-                this.spatialIndex.insert(node.spatialItem);
-                node.spatialDirty = false;
-            }
-        }
-
-        // 递归处理子节点
         const children = node.children;
-        if (children.length > 0) {
-            for (let i = 0; i < children.length; i++) {
-                this.syncSpatialIndex(children[i], isDirty);
+        const len = children.length;
+        if (len > 0) {
+            for (let i = 0; i < len; i++) {
+                this.updateRenderOrder(children[i]);
             }
         }
-
-        // 清除标记
-        node.subtreeDirty = false;
-        if (isDirty) node.spatialDirty = false;
     }
 
     /**
@@ -460,18 +402,15 @@ void main() {
         this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
 
-        // 1. 同步空间索引 (增量更新)
-        const t0 = performance.now();
-        this.syncSpatialIndex(scene);
-        
         // 如果结构发生变化，重新计算全局渲染顺序
         if (this._structureDirty) {
             this._nextRenderOrder = 0;
+            this._nodesByOrder.length = 0; // 重置顺序映射表
             this.updateRenderOrder(scene);
             this._structureDirty = false;
         }
-        
-        this.stats.times.nodeTransform = performance.now() - t0;
+
+        this.stats.times.nodeTransform = 0; // MatrixSpatialIndex 不需要单独的全局同步步阶
 
         // 2. 设置 WebGL 状态
         if (dirtyRect) {
@@ -490,17 +429,55 @@ void main() {
 
         // 3. 空间查询：获取视野内的节点
         const r0 = performance.now();
-        const queryBox = this.getViewportWorldAABB(dirtyRect);
-        const visibleItems = this.spatialIndex.search(queryBox);
-        
-        // 4. 排序：确保渲染顺序（基于 renderOrder，反映场景树结构）
-        visibleItems.sort((a, b) => a.node.renderOrder - b.node.renderOrder);
 
-        // 5. 渲染可见节点
-        for (const item of visibleItems) {
-            const node = item.node;
-            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                (node as any).renderWebGL(this, dirtyRect);
+        let visibleNodes: Node[] = [];
+
+        // 使用分层矩阵索引 (MatrixSpatialIndex)
+        if (scene.childSpatialIndex) {
+            scene.childSpatialIndex.queryRecursive(
+                this.viewMatrix,
+                scene.getWorldMatrix(),
+                dirtyRect || { x: 0, y: 0, width: this.width, height: this.height },
+                visibleNodes
+            );
+        }
+
+        if (this._frameCount % 60 === 0) {
+            console.log(`Visible nodes: ${visibleNodes.length} / ${this._nextRenderOrder}`);
+        }
+
+        // 4. 排序：确保渲染顺序
+        const visibleCount = visibleNodes.length;
+        if (visibleCount > 20000) {
+            // 大规模渲染路径：使用位图排序
+            const totalNodes = this._nextRenderOrder;
+            if (this._visibleBitset.length < totalNodes) {
+                this._visibleBitset = new Uint8Array(Math.ceil(totalNodes * 1.2));
+            } else {
+                this._visibleBitset.fill(0);
+            }
+
+            for (let i = 0; i < visibleCount; i++) {
+                this._visibleBitset[visibleNodes[i].renderOrder] = 1;
+            }
+
+            // 5. 渲染可见节点
+            for (let i = 0; i < totalNodes; i++) {
+                if (this._visibleBitset[i] === 1) {
+                    const node = this._nodesByOrder[i];
+                    if (node && 'renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                        (node as any).renderWebGL(this, dirtyRect);
+                    }
+                }
+            }
+        } else {
+            // 标准渲染路径：按照 renderOrder 排序后渲染
+            visibleNodes.sort((a, b) => a.renderOrder - b.renderOrder);
+            for (let i = 0; i < visibleCount; i++) {
+                const node = visibleNodes[i];
+                if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                    (node as any).renderWebGL(this, dirtyRect);
+                }
             }
         }
         this.stats.times.renderWebGL = performance.now() - r0;
@@ -515,54 +492,27 @@ void main() {
     }
 
     /**
-     * 获取当前视口的世界 AABB
-     */
-    private getViewportWorldAABB(cullingRect?: Rect) {
-        const invView = this.viewMatrixInverse;
-        const p0 = vec2.set(this._tempVec2_0, 0, 0);
-        const p1 = vec2.set(this._tempVec2_1, this.width, this.height);
-        const w0 = this._tempVec2_2;
-        const w1 = this._tempVec2_3;
-        vec2.transformMat3(w0, p0, invView);
-        vec2.transformMat3(w1, p1, invView);
-
-        let minX = Math.min(w0[0], w1[0]);
-        let minY = Math.min(w0[1], w1[1]);
-        let maxX = Math.max(w0[0], w1[0]);
-        let maxY = Math.max(w0[1], w1[1]);
-
-        if (cullingRect) {
-            const cp0 = vec2.set(this._tempVec2_0, cullingRect.x, cullingRect.y);
-            const cp1 = vec2.set(this._tempVec2_1, cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
-            const cw0 = vec2.create(); 
-            const cw1 = vec2.create();
-            vec2.transformMat3(cw0, cp0, invView);
-            vec2.transformMat3(cw1, cp1, invView);
-            minX = Math.max(minX, Math.min(cw0[0], cw1[0]));
-            minY = Math.max(minY, Math.min(cw0[1], cw1[1]));
-            maxX = Math.min(maxX, Math.max(cw0[0], cw1[0]));
-            maxY = Math.min(maxY, Math.max(cw0[1], cw1[1]));
-        }
-
-        return { minX, minY, maxX, maxY };
-    }
-
-    /**
      * 渲染整个场景 (Canvas 2D Pass)
      */
     public renderCanvas(scene: Node, dirtyRect?: Rect) {
         const c0 = performance.now();
-        
+
         // 1. 空间查询
-        const queryBox = this.getViewportWorldAABB(dirtyRect);
-        const visibleItems = this.spatialIndex.search(queryBox);
-        
+        let visibleNodes: Node[] = [];
+        if (scene.childSpatialIndex) {
+            scene.childSpatialIndex.queryRecursive(
+                this.viewMatrix,
+                scene.getWorldMatrix(),
+                dirtyRect || { x: 0, y: 0, width: this.width, height: this.height },
+                visibleNodes
+            );
+        }
+
         // 2. 排序
-        visibleItems.sort((a, b) => a.node.renderOrder - b.node.renderOrder);
+        visibleNodes.sort((a, b) => a.renderOrder - b.renderOrder);
 
         // 3. 渲染
-        for (const item of visibleItems) {
-            const node = item.node;
+        for (const node of visibleNodes) {
             if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
                 (node as any).renderCanvas(this);
             }
@@ -584,8 +534,28 @@ void main() {
         // No-op in batch mode
     }
 
-    public getProjectionMatrix() {
+    public getProjectionMatrix(): mat3 {
         return this.projectionMatrix;
+    }
+
+    /**
+     * 使用分层空间索引查询可见节点
+     * @param rootNode 起始搜索节点
+     * @param viewport 视口范围
+     * @returns 可见节点列表
+     */
+    public queryVisibleNodes(rootNode: Node, viewport: Rect): Node[] {
+        if (!rootNode.childSpatialIndex) {
+            return [];
+        }
+        const result: Node[] = [];
+        rootNode.childSpatialIndex.queryRecursive(
+            this.viewMatrix,
+            rootNode.getWorldMatrix(),
+            viewport,
+            result
+        );
+        return result;
     }
 
     /**
@@ -597,11 +567,11 @@ void main() {
     public setViewTransform(x: number, y: number, scale: number) {
         // 构建视图矩阵: 先缩放再平移
         mat3.identity(this.viewMatrix);
-        
+
         // 缩放
         this.viewMatrix[0] = scale;
         this.viewMatrix[4] = scale;
-        
+
         // 平移
         this.viewMatrix[6] = x;
         this.viewMatrix[7] = y;

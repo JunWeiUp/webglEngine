@@ -317,6 +317,7 @@ function updateStats(time: number) {
         Logic: ${glStats.times.logic.toFixed(2)}<br>
         Hit Test: ${glStats.times.hitTest.toFixed(2)}<br>
         Box Select: ${glStats.times.boxSelect.toFixed(2)}<br>
+        Interaction to Render: ${glStats.times.interactionToRender.toFixed(2)}<br>
         <div style="color: #ffff00; margin-top: 2px;">Total: ${glStats.times.total.toFixed(2)}</div>
     `;
     requestAnimationFrame(updateStats);
