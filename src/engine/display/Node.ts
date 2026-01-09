@@ -5,6 +5,17 @@ import type { IRenderer } from '../core/IRenderer';
 import type { Rect } from '../core/Rect';
 
 /**
+ * RBush 数据项接口
+ */
+export interface NodeSpatialItem {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    node: Node;
+}
+
+/**
  * Node 类
  * 
  * 场景图中的基本节点，具有层级关系（父子节点）。
@@ -60,14 +71,16 @@ export class Node {
     public worldMaxX: number = -Infinity;
     public worldMaxY: number = -Infinity;
 
-
+    /** 空间索引数据项 (RBush 使用) */
+    public spatialItem: NodeSpatialItem | null = null;
 
     /** 状态位掩码 */
-    private _flags: number = 8; // 默认 BIT_SUBTREE_DIRTY 为 1
+    private _flags: number = 24; // 默认 BIT_SUBTREE_DIRTY(8) | BIT_SPATIAL_DIRTY(16) 为 1
     private static readonly BIT_INTERACTIVE = 1;
     private static readonly BIT_HOVERED = 2;
     private static readonly BIT_SELECTED = 4;
     private static readonly BIT_SUBTREE_DIRTY = 8;
+    private static readonly BIT_SPATIAL_DIRTY = 16;
 
     public get interactive(): boolean { return (this._flags & Node.BIT_INTERACTIVE) !== 0; }
     public set interactive(v: boolean) { if (v) this._flags |= Node.BIT_INTERACTIVE; else this._flags &= ~Node.BIT_INTERACTIVE; }
@@ -85,6 +98,22 @@ export class Node {
             if (this.parent) this.parent.subtreeDirty = true;
         } else if (!v) {
             this._flags &= ~Node.BIT_SUBTREE_DIRTY;
+        }
+    }
+
+    /** 空间数据是否过期（需要更新 RBush） */
+    public get spatialDirty(): boolean { return (this._flags & Node.BIT_SPATIAL_DIRTY) !== 0; }
+    public set spatialDirty(v: boolean) {
+        if (v && !(this._flags & Node.BIT_SPATIAL_DIRTY)) {
+            this._flags |= Node.BIT_SPATIAL_DIRTY;
+            // 当父节点空间失效时，所有子节点的世界 AABB 也会失效
+            if (this._children) {
+                for (const child of this._children) {
+                    child.spatialDirty = true;
+                }
+            }
+        } else if (!v) {
+            this._flags &= ~Node.BIT_SPATIAL_DIRTY;
         }
     }
 
@@ -139,11 +168,50 @@ export class Node {
      */
     public markTransformDirty() {
         this.transform.dirty = true;
+        this.spatialDirty = true; // 变换改变，空间位置必然失效
         let p = this.parent;
         while (p && !p.subtreeDirty) {
             p.subtreeDirty = true;
             p = p.parent;
         }
+    }
+
+    /**
+     * 获取当前节点的世界变换矩阵 (按需计算)
+     * 如果该节点或其任何祖先节点的变换已脏，则会递归向上回溯并重新计算。
+     */
+    public getWorldMatrix(): mat3 {
+        // 核心修复：如果自身空间标记为脏（意味着自身或任何祖先发生了变动），则必须重新计算
+        if (!this.spatialDirty && !this.transform.dirty) {
+            return this.transform.worldMatrix;
+        }
+
+        // 向上回溯找到最顶层的脏祖先
+        const path: Node[] = [];
+        let current: Node | null = this;
+        while (current) {
+            path.push(current);
+            // 如果遇到一个既不 spatialDirty 也不 transform.dirty 的节点，说明其 worldMatrix 是可靠的
+            if (!current.spatialDirty && !current.transform.dirty) {
+                break;
+            }
+            current = current.parent;
+        }
+
+        // 从上往下依次更新
+        let parentMatrix: mat3 | null = current ? current.parent?.transform.worldMatrix || null : null;
+        for (let i = path.length - 1; i >= 0; i--) {
+            const node = path[i];
+            node.transform.updateLocalTransform();
+            node.transform.updateWorldTransform(parentMatrix);
+            parentMatrix = node.transform.worldMatrix;
+            
+            // 计算完成后，清除自身的脏标记
+            // 注意：不要直接调用 setter，避免多余的向下递归
+            node._flags &= ~Node.BIT_SPATIAL_DIRTY;
+        }
+
+        return this.transform.worldMatrix;
     }
 
     get x(): number { return this.transform.x; }
@@ -304,11 +372,15 @@ export class Node {
         if (child.parent) {
             child.parent.removeChild(child);
         }
+        
         child.parent = this;
         this.children.push(child);
         
-        // 结构变化，标记子树脏
-        this.markTransformDirty();
+        // 结构变化：
+        // 1. 标记当前节点的子树已脏
+        this.subtreeDirty = true;
+        // 2. 标记新加入子节点及其整个子树的空间位置失效
+        child.spatialDirty = true;
 
         if (!first) {
             this.invalidate(); // 结构变化需要重绘
@@ -323,11 +395,16 @@ export class Node {
         if (!this._children) return;
         const index = this._children.indexOf(child);
         if (index !== -1) {
-            // 结构变化，标记子树脏
-            this.markTransformDirty();
-
             this._children.splice(index, 1);
+            
+            // 结构变化：
+            // 1. 标记当前节点的子树已脏
+            this.subtreeDirty = true;
+            
             child.parent = null;
+            // 2. 脱离父节点，世界坐标失效
+            child.spatialDirty = true; 
+            
             this.invalidate(); // 结构变化需要重绘
         }
     }
@@ -343,7 +420,7 @@ export class Node {
     /**
      * 生命周期钩子：每帧更新时调用
      */
-    protected onUpdate(): void { }
+    public onUpdate(): void { }
 
     /**
      * 递归更新变换矩阵
@@ -396,18 +473,22 @@ export class Node {
     /**
      * 更新世界 AABB
      */
-    private updateWorldAABB() {
-        const m = this.transform.worldMatrix;
+    public updateWorldAABB() {
+        if (this.width <= 0 || this.height <= 0) {
+            this.worldMinX = Infinity;
+            this.worldMinY = Infinity;
+            this.worldMaxX = -Infinity;
+            this.worldMaxY = -Infinity;
+            return;
+        }
+
+        const m = this.getWorldMatrix();
         const w = this.width;
         const h = this.height;
 
         // 计算四个角的世界坐标
-        // x' = x*m00 + y*m10 + m20
-        // y' = x*m01 + y*m11 + m21
-        
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         
-        // 优化：不再创建数组，直接计算
         // 0,0
         let wx = m[6];
         let wy = m[7];
@@ -453,7 +534,7 @@ export class Node {
     hitTest(worldPoint: vec2): boolean {
         // 使用共享变量计算世界矩阵的逆矩阵
         const invertMatrix = Node.sharedMat3;
-        mat3.invert(invertMatrix, this.transform.worldMatrix);
+        mat3.invert(invertMatrix, this.getWorldMatrix());
 
         // 使用共享变量存储局部坐标
         const localPoint = Node.sharedVec2;

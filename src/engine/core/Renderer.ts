@@ -1,7 +1,8 @@
-import { Node } from '../display/Node';
+import { Node, type NodeSpatialItem } from '../display/Node';
 import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from './Rect';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
+import RBush from 'rbush';
 
 /**
  * 核心渲染器类
@@ -13,6 +14,10 @@ export class Renderer {
     public ctx: CanvasRenderingContext2D;
     public width: number;
     public height: number;
+
+    // 空间索引
+    private spatialIndex: RBush<NodeSpatialItem> = new RBush();
+    private allNodesInIndex: Set<Node> = new Set();
 
     private shaderProgram: WebGLProgram | null = null;
 
@@ -64,6 +69,11 @@ export class Renderer {
     private viewMatrix: mat3 = mat3.create();
     private viewMatrixInverse: mat3 = mat3.create();
 
+    // 矩阵栈，用于在遍历过程中维护当前的变换
+    private matrixStack: mat3[] = [];
+    private matrixStackIndex: number = 0;
+    private static readonly MAX_STACK_DEPTH = 32;
+
     // 缓存用于剔除计算的临时变量
     private _tempVec2_0 = vec2.create();
     private _tempVec2_1 = vec2.create();
@@ -74,6 +84,7 @@ export class Renderer {
     private _frameCount: number = 0;
     /** FPS 统计上次更新时间 */
     private lastFPSUpdateTime: number = 0;
+    private _isBatchUpdatingSpatial: boolean = false;
     /** 当前帧全局时间戳 (ms) */
     public static currentTime: number = 0;
 
@@ -123,6 +134,11 @@ export class Renderer {
         this.resize(this.width, this.height);
         this.initWebGL();
         this.lastFPSUpdateTime = performance.now();
+
+        // 预分配矩阵栈空间
+        for (let i = 0; i < Renderer.MAX_STACK_DEPTH; i++) {
+            this.matrixStack.push(mat3.create());
+        }
     }
 
     /**
@@ -341,15 +357,80 @@ void main() {
     }
 
     /**
+     * 开始批量更新空间索引 (期间会挂起 RBush 插入/删除操作)
+     */
+    public beginSpatialBatch() {
+        this._isBatchUpdatingSpatial = true;
+    }
+
+    /**
+     * 结束批量更新空间索引
+     */
+    public endSpatialBatch() {
+        this._isBatchUpdatingSpatial = false;
+    }
+
+    /**
+     * 同步空间索引 (RBush)
+     * 增量更新场景中发生变换的节点的 AABB
+     */
+    private syncSpatialIndex(node: Node, parentSpatialDirty: boolean = false) {
+        if (this._isBatchUpdatingSpatial) return;
+
+        const isDirty = node.spatialDirty || parentSpatialDirty;
+
+        // 如果子树不脏且当前路径没有脏标记，直接跳过
+        if (!node.subtreeDirty && !isDirty) {
+            return;
+        }
+
+        // 如果节点有尺寸，且空间信息已脏，则更新 RBush
+        if (node.width > 0 && node.height > 0) {
+            if (isDirty || !node.spatialItem) {
+                // 1. 从索引中移除旧条目
+                if (node.spatialItem) {
+                    this.spatialIndex.remove(node.spatialItem);
+                } else {
+                    this.allNodesInIndex.add(node);
+                }
+
+                // 2. 更新世界 AABB (这会触发回溯计算变换矩阵)
+                node.updateWorldAABB();
+
+                // 3. 创建新条目并插入索引
+                node.spatialItem = {
+                    minX: node.worldMinX,
+                    minY: node.worldMinY,
+                    maxX: node.worldMaxX,
+                    maxY: node.worldMaxY,
+                    node: node
+                };
+                this.spatialIndex.insert(node.spatialItem);
+                node.spatialDirty = false;
+            }
+        }
+
+        // 递归处理子节点
+        const children = node.children;
+        if (children.length > 0) {
+            for (let i = 0; i < children.length; i++) {
+                this.syncSpatialIndex(children[i], isDirty);
+            }
+        }
+
+        // 清除标记
+        node.subtreeDirty = false;
+        if (isDirty) node.spatialDirty = false;
+    }
+
+    /**
      * 渲染整个场景 (WebGL)
-     * @param scene 场景根节点
-     * @param dirtyRect 脏矩形区域 (可选)。如果提供，仅清除和重绘该区域。
+     * 优化：基于 RBush 空间查询，彻底跳过不可见节点的遍历
      */
     public render(scene: Node, dirtyRect?: Rect) {
         const startTime = performance.now();
-        Renderer.currentTime = startTime; // 更新全局时间
+        Renderer.currentTime = startTime;
 
-        // 计算 FPS (每秒更新一次)
         this.stats.frameCount++;
         if (startTime - this.lastFPSUpdateTime >= 1000) {
             const elapsed = startTime - this.lastFPSUpdateTime;
@@ -358,61 +439,48 @@ void main() {
             this.lastFPSUpdateTime = startTime;
         }
 
-        // 递增帧序号
         this._frameCount++;
-
-        // 重置统计
         this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
-        this.stats.times.nodeTransform = 0;
 
-        // 1. 设置 WebGL Scissor Test (裁剪测试)
+        // 1. 同步空间索引 (增量更新)
+        const t0 = performance.now();
+        this.syncSpatialIndex(scene);
+        this.stats.times.nodeTransform = performance.now() - t0;
+
+        // 2. 设置 WebGL 状态
         if (dirtyRect) {
             this.gl.enable(this.gl.SCISSOR_TEST);
-
-            // 计算 dirtyRect 的边界 (屏幕坐标)
             const left = Math.floor(dirtyRect.x);
             const top = Math.floor(dirtyRect.y);
             const right = Math.ceil(dirtyRect.x + dirtyRect.width);
             const bottom = Math.ceil(dirtyRect.y + dirtyRect.height);
-
-            // WebGL Scissor 原点在左下角，而 Rect 是左上角
-            // 需要转换 Y 轴
-            const width = right - left;
-            const height = bottom - top;
-            const scissorX = left;
-            const scissorY = this.height - bottom;
-
-            // 限制在画布范围内
-            const x = Math.max(0, scissorX);
-            const y = Math.max(0, scissorY);
-            const w = Math.min(this.width - x, width + (scissorX < 0 ? scissorX : 0));
-            const h = Math.min(this.height - y, height + (scissorY < 0 ? scissorY : 0));
-
-            this.gl.scissor(x, y, w, h);
+            this.gl.scissor(left, this.height - bottom, right - left, bottom - top);
         } else {
             this.gl.disable(this.gl.SCISSOR_TEST);
         }
 
-        // 2. 清除 WebGL 画布
-        // 如果启用了 Scissor，clear 只会清除 Scissor 区域
         this.gl.clearColor(0.1, 0.1, 0.1, 1);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
-        // 更新场景的世界变换矩阵
-        const t0 = performance.now();
-        scene.updateTransform(null, false); // 根节点使用脏标记按需更新
-        this.stats.times.transform = performance.now() - t0;
-
-        // 3. 递归遍历渲染
+        // 3. 空间查询：获取视野内的节点
         const r0 = performance.now();
-        // 优化点：如果节点过多，renderNodeWebGL 会非常卡。
-        // 这里的递归是性能杀手。我们已经引入了子树裁剪，
-        // 但对于 10万+ 节点，递归本身的开销依然存在。
-        this.renderNodeWebGL(scene, dirtyRect);
+        const queryBox = this.getViewportWorldAABB(dirtyRect);
+        const visibleItems = this.spatialIndex.search(queryBox);
+        
+        // 4. 排序：确保渲染顺序（基于 ID，代表创建顺序）
+        visibleItems.sort((a, b) => a.node.id - b.node.id);
+
+        // 5. 渲染可见节点
+        for (const item of visibleItems) {
+            const node = item.node;
+            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                (node as any).renderWebGL(this, dirtyRect);
+            }
+        }
         this.stats.times.renderWebGL = performance.now() - r0;
 
-        // 渲染结束，强制刷新剩余的批次
+        // 6. 刷新批次
         const f0 = performance.now();
         this.flush();
         this.stats.times.flush = performance.now() - f0;
@@ -422,14 +490,59 @@ void main() {
     }
 
     /**
+     * 获取当前视口的世界 AABB
+     */
+    private getViewportWorldAABB(cullingRect?: Rect) {
+        const invView = this.viewMatrixInverse;
+        const p0 = vec2.set(this._tempVec2_0, 0, 0);
+        const p1 = vec2.set(this._tempVec2_1, this.width, this.height);
+        const w0 = this._tempVec2_2;
+        const w1 = this._tempVec2_3;
+        vec2.transformMat3(w0, p0, invView);
+        vec2.transformMat3(w1, p1, invView);
+
+        let minX = Math.min(w0[0], w1[0]);
+        let minY = Math.min(w0[1], w1[1]);
+        let maxX = Math.max(w0[0], w1[0]);
+        let maxY = Math.max(w0[1], w1[1]);
+
+        if (cullingRect) {
+            const cp0 = vec2.set(this._tempVec2_0, cullingRect.x, cullingRect.y);
+            const cp1 = vec2.set(this._tempVec2_1, cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
+            const cw0 = vec2.create(); 
+            const cw1 = vec2.create();
+            vec2.transformMat3(cw0, cp0, invView);
+            vec2.transformMat3(cw1, cp1, invView);
+            minX = Math.max(minX, Math.min(cw0[0], cw1[0]));
+            minY = Math.max(minY, Math.min(cw0[1], cw1[1]));
+            maxX = Math.min(maxX, Math.max(cw0[0], cw1[0]));
+            maxY = Math.min(maxY, Math.max(cw0[1], cw1[1]));
+        }
+
+        return { minX, minY, maxX, maxY };
+    }
+
+    /**
      * 渲染整个场景 (Canvas 2D Pass)
-     * @param scene 场景根节点
-     * @param dirtyRect 脏矩形区域 (可选)
      */
     public renderCanvas(scene: Node, dirtyRect?: Rect) {
         const c0 = performance.now();
-        // 递归渲染节点树 (Canvas Pass)
-        this.renderNodeCanvas(scene, dirtyRect);
+        
+        // 1. 空间查询
+        const queryBox = this.getViewportWorldAABB(dirtyRect);
+        const visibleItems = this.spatialIndex.search(queryBox);
+        
+        // 2. 排序
+        visibleItems.sort((a, b) => a.node.id - b.node.id);
+
+        // 3. 渲染
+        for (const item of visibleItems) {
+            const node = item.node;
+            if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
+                (node as any).renderCanvas(this);
+            }
+        }
+
         this.stats.times.canvas2D = performance.now() - c0;
     }
 
@@ -439,134 +552,6 @@ void main() {
      */
     public restoreCanvas2D(_dirtyRect?: Rect) {
         // No-op
-    }
-
-    /**
-     * 渲染节点及其子节点 (WebGL Pass)
-     * 优化：使用显式栈代替递归，减少函数调用开销，并增加极速裁剪
-     */
-    private renderNodeWebGL(root: Node, cullingRect?: Rect) {
-        const stack: Node[] = [root];
-
-        // 获取当前视口的世界坐标范围
-        const invView = this.viewMatrixInverse;
-        
-        // 视口左上角和右下角的世界坐标
-        const p0 = vec2.set(this._tempVec2_0, 0, 0);
-        const p1 = vec2.set(this._tempVec2_1, this.width, this.height);
-        const w0 = this._tempVec2_2;
-        const w1 = this._tempVec2_3;
-        vec2.transformMat3(w0, p0, invView);
-        vec2.transformMat3(w1, p1, invView);
-
-        // 世界空间下的视口范围 (AABB)
-        let viewMinX = Math.min(w0[0], w1[0]);
-        let viewMinY = Math.min(w0[1], w1[1]);
-        let viewMaxX = Math.max(w0[0], w1[0]);
-        let viewMaxY = Math.max(w0[1], w1[1]);
-
-        // 如果有特定的裁剪矩形 (脏矩形，屏幕空间)，将其进一步缩小世界空间裁剪范围
-        if (cullingRect) {
-            // 注意：cullingRect 转换后可能不再是 AABB，这里取转换后的 AABB
-            const cp0 = vec2.set(this._tempVec2_0, cullingRect.x, cullingRect.y);
-            const cp1 = vec2.set(this._tempVec2_1, cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
-            const cw0 = vec2.create(); // 这里还是需要新的，或者更多缓存
-            const cw1 = vec2.create();
-            vec2.transformMat3(cw0, cp0, invView);
-            vec2.transformMat3(cw1, cp1, invView);
-
-            viewMinX = Math.max(viewMinX, Math.min(cw0[0], cw1[0]));
-            viewMinY = Math.max(viewMinY, Math.min(cw0[1], cw1[1]));
-            viewMaxX = Math.min(viewMaxX, Math.max(cw0[0], cw1[0]));
-            viewMaxY = Math.min(viewMaxY, Math.max(cw0[1], cw1[1]));
-        }
-
-        while (stack.length > 0) {
-            const node = stack.pop()!;
-
-            // 1. 快速剔除 (使用世界空间坐标进行判断)
-            if (node.worldMinX !== Infinity) {
-                if (node.worldMaxX < viewMinX || node.worldMinX > viewMaxX ||
-                    node.worldMaxY < viewMinY || node.worldMinY > viewMaxY) {
-                    continue; // 子树裁剪
-                }
-            }
-
-            // 2. 渲染当前节点
-            if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                (node as any).renderWebGL(this, cullingRect);
-            }
-
-            // 3. 将子节点入栈
-            const children = node.children;
-            for (let i = children.length - 1; i >= 0; i--) {
-                stack.push(children[i]);
-            }
-        }
-    }
-
-    /**
-     * 递归渲染节点及其子节点 (Canvas Pass)
-     */
-    private renderNodeCanvas(node: Node, cullingRect?: Rect) {
-        // 视锥体剔除
-        let isVisible = true;
-        if (node.width > 0 && node.height > 0) {
-            isVisible = this.isNodeVisible(node, cullingRect);
-        }
-
-        if (isVisible) {
-            // 调用节点的 Canvas 渲染方法（如果存在）
-            if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
-                (node as any).renderCanvas(this);
-            }
-        }
-
-        // 递归遍历子节点
-        for (const child of node.children) {
-            this.renderNodeCanvas(child, cullingRect);
-        }
-    }
-
-    /**
-     * 检查节点是否在视口范围内（基于 AABB）
-     */
-    private isNodeVisible(node: Node, cullingRect?: Rect): boolean {
-        // 极致优化：直接访问 AABB 属性，减少属性查找
-        if (node.worldMinX === Infinity) return true; // 无尺寸节点默认可见 (用于容器向下递归)
-
-        const invView = this.viewMatrixInverse;
-        const p0 = vec2.fromValues(0, 0);
-        const p1 = vec2.fromValues(this.width, this.height);
-        const w0 = vec2.create();
-        const w1 = vec2.create();
-        vec2.transformMat3(w0, p0, invView);
-        vec2.transformMat3(w1, p1, invView);
-
-        let viewMinX = Math.min(w0[0], w1[0]);
-        let viewMinY = Math.min(w0[1], w1[1]);
-        let viewMaxX = Math.max(w0[0], w1[0]);
-        let viewMaxY = Math.max(w0[1], w1[1]);
-
-        if (cullingRect) {
-            const cp0 = vec2.fromValues(cullingRect.x, cullingRect.y);
-            const cp1 = vec2.fromValues(cullingRect.x + cullingRect.width, cullingRect.y + cullingRect.height);
-            const cw0 = vec2.create();
-            const cw1 = vec2.create();
-            vec2.transformMat3(cw0, cp0, invView);
-            vec2.transformMat3(cw1, cp1, invView);
-
-            viewMinX = Math.max(viewMinX, Math.min(cw0[0], cw1[0]));
-            viewMinY = Math.max(viewMinY, Math.min(cw0[1], cw1[1]));
-            viewMaxX = Math.min(viewMaxX, Math.max(cw0[0], cw1[0]));
-            viewMaxY = Math.min(viewMaxY, Math.max(cw0[1], cw1[1]));
-        }
-
-        // 高效的 AABB 相交检测
-        return !(node.worldMaxX < viewMinX ||
-            node.worldMinX > viewMaxX ||
-            node.worldMaxY < viewMinY ||
-            node.worldMinY > viewMaxY);
     }
 
     // 废弃的辅助方法 (为了兼容旧接口暂时保留)
