@@ -137,7 +137,7 @@ export class Text extends Node {
         if (!this._texture || !this._texture.baseTexture) return; // 确保 texture 和 baseTexture 都存在
 
         // 渲染纹理 Quad
-        const m = this.transform.worldMatrix;
+        const m = this.getWorldMatrix();
         const w = this.width;
         const h = this.height;
 

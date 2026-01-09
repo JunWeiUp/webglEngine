@@ -63,13 +63,21 @@ export class TileLayer extends Node {
         this.tileSize = tileSize;
         this.tileSourceProvider = tileSourceProvider;
         this.baseZoom = baseZoom;
+        
+        // 设置一个巨大的包围盒，确保 TileLayer 始终在 RBush 空间索引中可见
+        // 这样渲染器才能在空间查询时检索到它
+        this.width = 20000000; // 2千万像素，足够覆盖常规应用场景
+        this.height = 20000000;
+        // 偏移中心，使其覆盖更大的范围
+        this.x = -10000000;
+        this.y = -10000000;
     }
 
     renderWebGL(renderer: Renderer, cullingRect?: Rect) {
         // 计算全局缩放系数以确定 LOD (Level of Detail)
         // 现在需要结合视图矩阵 (Camera) 计算
         const viewMatrix = renderer.getViewMatrix();
-        const wm = this.transform.worldMatrix;
+        const wm = this.getWorldMatrix();
         
         // 综合矩阵: view * world
         const combinedMatrix = mat3.create();

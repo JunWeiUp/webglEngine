@@ -403,18 +403,31 @@ export class InteractionManager {
             const target = this.auxLayer.dragTargetNode;
             if (target) {
                 const topLevelNodes = this.getTopLevelSelectedNodes();
+                
+                // 开启批量模式，避免重挂载过程中反复更新 RBush
+                this.renderer.beginSpatialBatch();
+
                 for (const draggingNode of topLevelNodes) {
+                    // 1. 记录当前的世界坐标
                     const worldPos = vec2.create();
-                    const wm = draggingNode.transform.worldMatrix;
+                    const wm = draggingNode.getWorldMatrix(); // 确保获取的是最新的
                     vec2.set(worldPos, wm[6], wm[7]);
+
+                    // 2. 改变层级
                     target.addChild(draggingNode);
+
+                    // 3. 根据新的父节点计算新的局部坐标，保持世界位置不变
                     const invertParent = mat3.create();
-                    mat3.invert(invertParent, target.transform.worldMatrix);
+                    mat3.invert(invertParent, target.getWorldMatrix());
                     const newLocal = vec2.create();
                     vec2.transformMat3(newLocal, worldPos, invertParent);
-                    draggingNode.x = newLocal[0];
-                    draggingNode.y = newLocal[1];
+                    
+                    // 使用 setTransform 减少失效调用
+                    draggingNode.setTransform(newLocal[0], newLocal[1], draggingNode.scaleX, draggingNode.scaleY);
                 }
+
+                this.renderer.endSpatialBatch();
+
                 if (this.onStructureChange) this.onStructureChange();
             }
             this.auxLayer.draggingNode = null;

@@ -88,7 +88,7 @@ export class Sprite extends Node {
     /**
      * 生命周期钩子：每帧检查是否需要卸载纹理以节省内存
      */
-    protected onUpdate() {
+    public onUpdate() {
         // 性能优化：不需要每帧都检查，每 60 帧检查一次卸载
         if (this._texture && this._textureUrl && (this.id % 60 === Renderer.currentTime % 60)) {
             if (Renderer.currentTime - this._lastVisibleTime > 10000) {
@@ -129,7 +129,7 @@ export class Sprite extends Node {
         
         // 计算四个顶点的世界坐标
         // 顺序: TL, TR, BR, BL
-        const m = this.transform.worldMatrix;
+        const m = this.getWorldMatrix();
         const w = this.width;
         const h = this.height;
 
