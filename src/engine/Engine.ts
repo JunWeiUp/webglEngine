@@ -4,6 +4,7 @@ import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { PropertyPanel } from './ui/PropertyPanel';
 import { Toolbar } from './ui/Toolbar';
+import { Ruler } from './ui/Ruler';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
@@ -28,9 +29,11 @@ export class Engine {
     public outline: OutlineView;
     public propertyPanel: PropertyPanel;
     public toolbar: Toolbar;
+    public ruler: Ruler;
     public auxLayer: AuxiliaryLayer;
     public alwaysRender: boolean = false;
     public activeTool: 'frame' | 'image' | 'text' | null = null;
+    public showRulers: boolean = true;
     private container: HTMLElement;
 
     // 渲染请求 ID (防抖动)
@@ -71,6 +74,9 @@ export class Engine {
         // 初始化辅助图层
         this.auxLayer = new AuxiliaryLayer();
 
+        // 初始化标尺
+        this.ruler = new Ruler(this.container);
+
         // 初始化交互管理器 (连接渲染器、场景和辅助图层)
         this.interaction = new InteractionManager(this, this.renderer, this.scene, this.auxLayer);
 
@@ -86,9 +92,21 @@ export class Engine {
         // 初始化工具栏
         this.toolbar = new Toolbar(this);
 
+        // 监听摄像机视图变化，更新标尺
+        this.interaction.onViewChange = () => {
+            this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
+        };
+
+        // 监听鼠标移动，更新标尺指示线
+        this.interaction.onMouseMoveCallback = (x, y) => {
+            this.ruler.updateMousePos(x, y);
+            this.requestRender();
+        };
+
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
+            this.updateRulerSelection();
             this.requestRender(); // 结构变化也触发渲染
         };
 
@@ -107,7 +125,10 @@ export class Engine {
             // 触发布局变化后的 resize
             const rect = this.container.getBoundingClientRect();
             this.renderer.resize(rect.width, rect.height);
+            this.ruler.resize();
+            this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
             
+            this.updateRulerSelection();
             this.requestRender();
         };
         this.interaction.onTransformChange = () => {
@@ -118,6 +139,11 @@ export class Engine {
             }
             const rect = this.container.getBoundingClientRect();
             this.renderer.resize(rect.width, rect.height);
+            
+            // 更新标尺
+            this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
+            this.updateRulerSelection();
+            
             this.requestRender();
         };
         this.interaction.onHoverChange = () => {
@@ -129,6 +155,8 @@ export class Engine {
         this._resizeHandler = () => {
             const rect = container.getBoundingClientRect();
             this.renderer.resize(rect.width, rect.height);
+            this.ruler.resize();
+            this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
             this.requestRender(); // 尺寸变化触发渲染
         };
         window.addEventListener('resize', this._resizeHandler);
@@ -161,6 +189,42 @@ export class Engine {
 
         // 销毁交互管理器
         this.interaction.dispose();
+    }
+
+    /**
+     * 更新标尺上的选中区域
+     */
+    private updateRulerSelection() {
+        if (this.auxLayer.selectedNodes.size === 0) {
+            this.ruler.updateSelection(null);
+            return;
+        }
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        for (const node of this.auxLayer.selectedNodes) {
+            const bounds = node.getBounds(true); // true for world space
+            if (bounds) {
+                minX = Math.min(minX, bounds.x);
+                minY = Math.min(minY, bounds.y);
+                maxX = Math.max(maxX, bounds.x + bounds.width);
+                maxY = Math.max(maxY, bounds.y + bounds.height);
+            }
+        }
+
+        if (minX === Infinity) {
+            this.ruler.updateSelection(null);
+        } else {
+            this.ruler.updateSelection({
+                x: minX,
+                y: minY,
+                width: maxX - minX,
+                height: maxY - minY
+            });
+        }
     }
 
     /**
@@ -225,6 +289,15 @@ export class Engine {
     }
 
     /**
+     * 请求辅助层全屏重绘 (不触发 WebGL 重绘)
+     */
+    public invalidateAuxFull() {
+        this.fullInvalidate = false;
+        this.dirtyRect = { x: 0, y: 0, width: this.renderer.width, height: this.renderer.height };
+        this.requestRender();
+    }
+
+    /**
      * 请求局部重绘
      * @param rect 变脏的区域 (屏幕坐标)
      */
@@ -240,6 +313,14 @@ export class Engine {
      */
     public invalidateAuxArea(rect: Rect) {
         this.updateDirtyRect(rect);
+        this.requestRender();
+    }
+
+    public toggleRulers() {
+        this.showRulers = !this.showRulers;
+        this.ruler.setVisible(this.showRulers);
+        // 如果隐藏标尺，通常也隐藏参考线
+        // this.auxLayer.showGuides = this.showRulers; 
         this.requestRender();
     }
 
@@ -301,6 +382,9 @@ export class Engine {
         if (drawAux || drawWebGL) {
             this.auxLayer.render(this.renderer.ctx, this.scene, this.renderer, renderRect);
         }
+
+        // 3. 绘制标尺 (按需)
+        this.ruler.maybeRender();
 
         // 重置脏状态
         this.fullInvalidate = false;

@@ -16,12 +16,20 @@ export interface AlignmentLine {
     value: number;   // coordinate in world space
 }
 
+export interface Guide {
+    type: 'v' | 'h';
+    value: number; // World space coordinate
+}
+
 export class AuxiliaryLayer {
     public static readonly HANDLE_SIZE = 8;
     public hoveredNode: Node | null = null;
     public hoveredHandle: HandleType | null = null;
     public activeHandle: HandleType | null = null;
     public alignmentLines: AlignmentLine[] = [];
+    public guides: Guide[] = [];
+    public hoveredGuide: Guide | null = null;
+    public selectedGuide: Guide | null = null;
 
     // --- 预分配临时变量 (GC 优化) ---
     private _tempMat3a = mat3.create();
@@ -184,6 +192,47 @@ export class AuxiliaryLayer {
                 ctx.stroke();
             }
             ctx.restore();
+        }
+
+        // 6. Draw Guides
+        this.drawGuides(ctx, viewMatrix);
+    }
+
+    private drawGuides(ctx: CanvasRenderingContext2D, viewMatrix: mat3) {
+        if (this.guides.length === 0) return;
+
+        const defaultColor = '#18a0fb';
+        const hoverColor = '#6bbdff';
+        const selectedColor = '#ff7b00';
+
+        for (const guide of this.guides) {
+            let color = defaultColor;
+            let lineWidth = 1;
+
+            if (guide === this.selectedGuide) {
+                color = selectedColor;
+                lineWidth = 2;
+            } else if (guide === this.hoveredGuide) {
+                color = hoverColor;
+                lineWidth = 1;
+            }
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+
+            if (guide.type === 'v') {
+                const sx = guide.value * viewMatrix[0] + viewMatrix[6];
+                ctx.beginPath();
+                ctx.moveTo(sx + 0.5, 0);
+                ctx.lineTo(sx + 0.5, ctx.canvas.height);
+                ctx.stroke();
+            } else {
+                const sy = guide.value * viewMatrix[4] + viewMatrix[7];
+                ctx.beginPath();
+                ctx.moveTo(0, sy + 0.5);
+                ctx.lineTo(ctx.canvas.width, sy + 0.5);
+                ctx.stroke();
+            }
         }
     }
 

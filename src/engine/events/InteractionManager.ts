@@ -2,6 +2,7 @@ import { Node } from '../display/Node';
 import { Renderer } from '../core/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
 import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
+import type { Guide } from '../display/AuxiliaryLayer';
 import type { Rect } from '../core/Rect';
 import type { Engine } from '../Engine';
 
@@ -29,6 +30,10 @@ export class InteractionManager {
     public onHoverChange: (() => void) | null = null;
     // 回调函数：当节点变换发生变化时触发 (如拖拽、缩放)
     public onTransformChange: (() => void) | null = null;
+    // 回调函数：当摄像机视图发生变化时触发 (如平移、缩放)
+    public onViewChange: (() => void) | null = null;
+    // 回调函数：当鼠标移动时触发
+    public onMouseMoveCallback: ((x: number, y: number) => void) | null = null;
     // 回调函数：用于创建新节点
     public onCreateNode: ((type: 'frame' | 'image' | 'text', x: number, y: number, w: number, h: number, parent: Node) => Node) | null = null;
 
@@ -36,6 +41,9 @@ export class InteractionManager {
     private isPanning: boolean = false;
     private isBoxSelecting: boolean = false;
     private isCreating: boolean = false;
+    private isDraggingGuide: boolean = false;
+    private draggingGuide: Guide | null = null;
+    private activeSnapPoints: number[] = []; // Cached snap points for current drag session
     private isFixedSizeCreation: boolean = false; // 是否为固定大小创建模式 (工具栏拖拽)
     private creationNode: Node | null = null;
 
@@ -46,9 +54,9 @@ export class InteractionManager {
     private _tempMat3b = mat3.create();
 
     // 摄像机状态 (取代直接修改 scene 坐标)
-    private cameraX: number = 0;
-    private cameraY: number = 0;
-    private cameraScale: number = 1;
+    public cameraX: number = 0;
+    public cameraY: number = 0;
+    public cameraScale: number = 1;
 
     // 记录上一帧的鼠标位置 (用于计算 delta)
     private lastMousePos: vec2 = vec2.create();
@@ -99,6 +107,7 @@ export class InteractionManager {
 
         // 4. 应用变换
         this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
+        if (this.onViewChange) this.onViewChange();
         this.scene.invalidate();
     }
 
@@ -122,6 +131,10 @@ export class InteractionManager {
         canvas.addEventListener('mouseup', this._handlers.mouseup);
         canvas.addEventListener('wheel', this._handlers.wheel, { passive: false });
         window.addEventListener('keydown', this._handlers.keydown);
+
+        // Ruler events
+        this.engine.ruler.horizontalCanvas.addEventListener('mousedown', (e) => this.onRulerMouseDown(e, 'h'));
+        this.engine.ruler.verticalCanvas.addEventListener('mousedown', (e) => this.onRulerMouseDown(e, 'v'));
     }
 
     /**
@@ -139,6 +152,56 @@ export class InteractionManager {
         this.onStructureChange = null;
         this.onSelectionChange = null;
         this.onHoverChange = null;
+    }
+
+    private onRulerMouseDown(e: MouseEvent, type: 'h' | 'v') {
+        this.engine.recordInteractionTime();
+        this.isDraggingGuide = true;
+        const pos = this.getMousePos(e);
+        const worldPos = this.getWorldMousePos(pos);
+        
+        this.draggingGuide = {
+            type,
+            value: type === 'h' ? worldPos[1] : worldPos[0]
+        };
+        
+        // Add to auxLayer temporarily or just track here
+        this.auxLayer.guides.push(this.draggingGuide);
+        
+        this.collectSnapPoints(type);
+        this.engine.invalidateAuxFull();
+    }
+
+    private collectSnapPoints(type: 'v' | 'h') {
+        this.activeSnapPoints = [];
+        const traverse = (node: Node) => {
+            if (node.interactive && node.parent) {
+                // 性能优化：使用 getBounds(false) 获取节点自身的世界包围盒，避免递归计算子节点合并包围盒
+                const bounds = node.getBounds(false); 
+                if (bounds) {
+                    if (type === 'v') {
+                        this.activeSnapPoints.push(bounds.x, bounds.x + bounds.width / 2, bounds.x + bounds.width);
+                    } else {
+                        this.activeSnapPoints.push(bounds.y, bounds.y + bounds.height / 2, bounds.y + bounds.height);
+                    }
+                }
+            }
+            if (node.children) {
+                for (const child of node.children) traverse(child);
+            }
+        };
+        traverse(this.scene);
+
+        // Add other guides as snap targets
+        for (const guide of this.auxLayer.guides) {
+            if (guide !== this.draggingGuide && guide.type === type) {
+                this.activeSnapPoints.push(guide.value);
+            }
+        }
+
+        // 性能优化：排序并去重，方便后续使用二分查找
+        this.activeSnapPoints.sort((a, b) => a - b);
+        this.activeSnapPoints = this.activeSnapPoints.filter((val, idx, arr) => idx === 0 || val !== arr[idx - 1]);
     }
 
     /**
@@ -189,11 +252,20 @@ export class InteractionManager {
                     if (this.onSelectionChange) this.onSelectionChange();
                     this.engine.requestRender();
                     break;
+                case 'r':
+                    if (isShift) {
+                        e.preventDefault();
+                        this.engine.toggleRulers();
+                    }
+                    break;
             }
         }
 
-        // 2. 节点删除
+        // 2. 节点/参考线删除
         if (key === 'backspace' || key === 'delete') {
+            let changed = false;
+            
+            // 删除节点
             if (this.auxLayer.selectedNodes.size > 0) {
                 const nodesToRemove = Array.from(this.auxLayer.selectedNodes);
                 nodesToRemove.forEach(node => {
@@ -204,6 +276,20 @@ export class InteractionManager {
                 this.auxLayer.selectedNodes.clear();
                 if (this.onSelectionChange) this.onSelectionChange();
                 if (this.onStructureChange) this.onStructureChange();
+                changed = true;
+            }
+
+            // 删除参考线
+            if (this.auxLayer.selectedGuide) {
+                const index = this.auxLayer.guides.indexOf(this.auxLayer.selectedGuide);
+                if (index !== -1) {
+                    this.auxLayer.guides.splice(index, 1);
+                    this.auxLayer.selectedGuide = null;
+                    changed = true;
+                }
+            }
+
+            if (changed) {
                 this.engine.requestRender();
             }
         }
@@ -379,6 +465,13 @@ export class InteractionManager {
 
         const scale = this.cameraScale;
         const worldThreshold = 5 / scale;
+        
+        // Calculate parent's global scale to convert world threshold to local threshold
+        const parentWorldMatrix = parent.getWorldMatrix();
+        const parentScaleX = Math.hypot(parentWorldMatrix[0], parentWorldMatrix[1]);
+        const parentScaleY = Math.hypot(parentWorldMatrix[3], parentWorldMatrix[4]);
+        const localThresholdX = worldThreshold / parentScaleX;
+        const localThresholdY = worldThreshold / parentScaleY;
 
         this.auxLayer.alignmentLines = [];
 
@@ -442,6 +535,27 @@ export class InteractionManager {
             yTargets.push({ value: ly, worldY: worldPos[1] });
         });
 
+        // 3. Add Guides as targets
+        const parentWorldMatrixInv = this._tempMat3a;
+        mat3.invert(parentWorldMatrixInv, parent.getWorldMatrix());
+
+        for (const guide of this.auxLayer.guides) {
+            if (guide.type === 'v') {
+                // Convert world guide value to parent's local space
+                const worldPos = this._tempVec2a;
+                vec2.set(worldPos, guide.value, 0);
+                const localPos = this._tempVec2b;
+                vec2.transformMat3(localPos, worldPos, parentWorldMatrixInv);
+                xTargets.push({ value: localPos[0], worldX: guide.value });
+            } else {
+                const worldPos = this._tempVec2a;
+                vec2.set(worldPos, 0, guide.value);
+                const localPos = this._tempVec2b;
+                vec2.transformMat3(localPos, worldPos, parentWorldMatrixInv);
+                yTargets.push({ value: localPos[1], worldY: guide.value });
+            }
+        }
+
         let snappedX = targetX;
         let snappedY = targetY;
 
@@ -449,7 +563,7 @@ export class InteractionManager {
         const myYLines = [targetY, targetY + node.height / 2, targetY + node.height];
 
         // Snap X
-        let minDX = worldThreshold;
+        let minDX = localThresholdX;
         for (let i = 0; i < 3; i++) {
             for (const target of xTargets) {
                 const dx = Math.abs(myXLines[i] - target.value);
@@ -462,7 +576,7 @@ export class InteractionManager {
         }
 
         // Snap Y
-        let minDY = worldThreshold;
+        let minDY = localThresholdY;
         for (let i = 0; i < 3; i++) {
             for (const target of yTargets) {
                 const dy = Math.abs(myYLines[i] - target.value);
@@ -616,7 +730,41 @@ export class InteractionManager {
         vec2.copy(this.dragStartMousePos, worldPos);
         this.dragStartNodesState.clear();
 
-        // 0. Check if a tool is active for creation
+        // 0. Check for existing Guide interaction
+        const snapThreshold = 5 / this.cameraScale;
+        let clickedGuide: Guide | null = null;
+        for (const guide of this.auxLayer.guides) {
+            if (guide.type === 'v') {
+                if (Math.abs(worldPos[0] - guide.value) < snapThreshold) {
+                    clickedGuide = guide;
+                    break;
+                }
+            } else {
+                if (Math.abs(worldPos[1] - guide.value) < snapThreshold) {
+                    clickedGuide = guide;
+                    break;
+                }
+            }
+        }
+
+        if (clickedGuide) {
+            this.isDraggingGuide = true;
+            this.draggingGuide = clickedGuide;
+            this.auxLayer.selectedGuide = clickedGuide; // 设置选中参考线
+            this.auxLayer.selectedNodes.clear(); // 选中参考线时取消选中节点
+            if (this.onSelectionChange) this.onSelectionChange();
+            this.collectSnapPoints(clickedGuide.type);
+            this.engine.invalidateAuxFull();
+            return;
+        }
+
+        // 选中空白区域或节点，取消参考线选中
+        if (this.auxLayer.selectedGuide) {
+            this.auxLayer.selectedGuide = null;
+            this.engine.invalidateAuxFull();
+        }
+
+        // 1. Check if a tool is active for creation
         if (this.engine.activeTool && this.onCreateNode) {
             this.isCreating = true;
             this.isFixedSizeCreation = false; // 画布点击拖拽，关闭固定大小模式（允许调整大小）
@@ -755,7 +903,99 @@ export class InteractionManager {
     private onMouseMove(e: MouseEvent) {
         this.engine.recordInteractionTime();
         const pos = this.getMousePos(e);
+        if (this.onMouseMoveCallback) this.onMouseMoveCallback(pos[0], pos[1]);
         const worldPos = this.getWorldMousePos(pos);
+
+        // 0. Handle Guide Interaction (Hover & Drag Existing)
+        if (!this.isDraggingGuide && !this.auxLayer.activeHandle && !this.auxLayer.draggingNode && !this.isCreating && !this.isBoxSelecting) {
+            const snapThreshold = 5 / this.cameraScale;
+            let foundGuide: Guide | null = null;
+            for (const guide of this.auxLayer.guides) {
+                if (guide.type === 'v') {
+                    if (Math.abs(worldPos[0] - guide.value) < snapThreshold) {
+                        foundGuide = guide;
+                        this.renderer.ctx.canvas.style.cursor = 'ew-resize';
+                        break;
+                    }
+                } else {
+                    if (Math.abs(worldPos[1] - guide.value) < snapThreshold) {
+                        foundGuide = guide;
+                        this.renderer.ctx.canvas.style.cursor = 'ns-resize';
+                        break;
+                    }
+                }
+            }
+
+            // 更新悬停状态
+            if (this.auxLayer.hoveredGuide !== foundGuide) {
+                this.auxLayer.hoveredGuide = foundGuide;
+                this.engine.invalidateAuxFull();
+            }
+
+            if (!foundGuide && this.renderer.ctx.canvas.style.cursor.includes('resize')) {
+                // Only reset if it was a guide resize cursor
+                // Note: this might interfere with handle cursors, but we checked !activeHandle
+                this.renderer.ctx.canvas.style.cursor = 'default';
+            }
+        }
+
+        // Handle Guide Dragging
+        if (this.isDraggingGuide && this.draggingGuide) {
+            let value = this.draggingGuide.type === 'h' ? worldPos[1] : worldPos[0];
+
+            // --- Guide Snapping to Objects (Optimized with Binary Search) ---
+            const snapThreshold = 5 / this.cameraScale;
+            this.auxLayer.alignmentLines = [];
+
+            let snappedValue = value;
+            let bestSnapPoint: number | null = null;
+            
+            if (this.activeSnapPoints.length > 0) {
+                // 使用二分查找找到最接近的吸附点
+                let low = 0;
+                let high = this.activeSnapPoints.length - 1;
+                let closestIdx = -1;
+                let minDelta = snapThreshold;
+
+                while (low <= high) {
+                    const mid = Math.floor((low + high) / 2);
+                    const p = this.activeSnapPoints[mid];
+                    const delta = Math.abs(value - p);
+
+                    if (delta < minDelta) {
+                        minDelta = delta;
+                        closestIdx = mid;
+                    }
+
+                    if (p < value) {
+                        low = mid + 1;
+                    } else if (p > value) {
+                        high = mid - 1;
+                    } else {
+                        closestIdx = mid;
+                        break;
+                    }
+                }
+
+                if (closestIdx !== -1) {
+                    snappedValue = this.activeSnapPoints[closestIdx];
+                    bestSnapPoint = snappedValue;
+                }
+            }
+            
+            if (bestSnapPoint !== null) {
+                this.auxLayer.alignmentLines.push({
+                    type: this.draggingGuide.type,
+                    value: bestSnapPoint
+                });
+            }
+            
+            this.draggingGuide.value = snappedValue;
+            this.engine.invalidateAuxFull();
+            this.lastMousePos = pos;
+            return;
+        }
+
         const deltaX = pos[0] - this.lastMousePos[0];
         const deltaY = pos[1] - this.lastMousePos[1];
         let needsRender = false;
@@ -1059,6 +1299,8 @@ export class InteractionManager {
                         const snapped = this.snapNode(node, newX, newY);
                         newX = snapped.x;
                         newY = snapped.y;
+                    } else {
+                        this.auxLayer.alignmentLines = [];
                     }
 
                     node.setPosition(newX, newY);
@@ -1101,6 +1343,7 @@ export class InteractionManager {
             this.cameraX += deltaX;
             this.cameraY += deltaY;
             this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
+            if (this.onViewChange) this.onViewChange();
             needsRender = true;
         }
 
@@ -1161,6 +1404,26 @@ export class InteractionManager {
 
     private onMouseUp(_e: MouseEvent) {
         let needsRender = false;
+
+        // 处理参考线拖拽结束
+        if (this.isDraggingGuide && this.draggingGuide) {
+            // 如果拖回标尺区域，则删除该参考线
+            const pos = this.getMousePos(_e);
+            const rulerSize = 20; // 标尺宽度
+            if (this.draggingGuide.type === 'h' && pos[1] < rulerSize) {
+                const index = this.auxLayer.guides.indexOf(this.draggingGuide);
+                if (index > -1) this.auxLayer.guides.splice(index, 1);
+            } else if (this.draggingGuide.type === 'v' && pos[0] < rulerSize) {
+                const index = this.auxLayer.guides.indexOf(this.draggingGuide);
+                if (index > -1) this.auxLayer.guides.splice(index, 1);
+            }
+            
+            this.isDraggingGuide = false;
+            this.draggingGuide = null;
+            this.activeSnapPoints = [];
+            this.auxLayer.alignmentLines = [];
+            needsRender = true;
+        }
 
         // 处理创建模式的结束
         if (this.isCreating) {
@@ -1272,6 +1535,7 @@ export class InteractionManager {
             this.cameraY -= e.deltaY;
             this.renderer.setViewTransform(this.cameraX, this.cameraY, this.cameraScale);
         }
+        if (this.onViewChange) this.onViewChange();
         this.scene.invalidate();
     }
 }

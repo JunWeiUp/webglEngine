@@ -30,18 +30,19 @@ export class PropertyPanel {
             position: 'absolute',
             top: '0',
             right: '0',
-            width: '240px',
+            width: 'var(--figma-panel-width)',
             height: '100vh',
             backgroundColor: 'var(--figma-bg-panel)',
             color: 'var(--figma-text-primary)',
-            fontFamily: 'inherit',
-            fontSize: '11px',
+            fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            fontSize: 'var(--figma-font-size-small)',
             zIndex: '1001',
             boxSizing: 'border-box',
             borderLeft: '1px solid var(--figma-border)',
             display: 'flex',
             flexDirection: 'column',
             overflowY: 'auto',
+            overflowX: 'hidden',
             userSelect: 'none'
         });
     }
@@ -78,7 +79,7 @@ export class PropertyPanel {
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
-                borderRadius: '4px',
+                borderRadius: '2px',
                 color: 'var(--figma-text-secondary)',
                 transition: 'background-color 0.15s, color 0.15s'
             });
@@ -195,7 +196,7 @@ export class PropertyPanel {
             width: '60px',
             height: '60px',
             border: '1px solid var(--figma-border)',
-            borderRadius: '4px',
+            borderRadius: '2px',
             position: 'relative',
             backgroundColor: 'rgba(0,0,0,0.1)',
             display: 'flex',
@@ -283,7 +284,7 @@ export class PropertyPanel {
             fontSize: '11px',
             padding: '4px 20px 4px 4px',
             outline: 'none',
-            borderRadius: '4px',
+            borderRadius: '2px',
             cursor: 'pointer',
             appearance: 'none',
             transition: 'background-color 0.15s, border-color 0.15s'
@@ -703,7 +704,7 @@ export class PropertyPanel {
             fontSize: '11px',
             padding: '4px 4px',
             outline: 'none',
-            borderRadius: '4px',
+            borderRadius: '2px', // Figma standard
             boxSizing: 'border-box',
             transition: 'background-color 0.15s, border-color 0.15s'
         });
@@ -722,7 +723,7 @@ export class PropertyPanel {
         });
 
         input.addEventListener('focus', () => {
-            input.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+            input.style.backgroundColor = 'var(--figma-active-bg)';
             input.style.border = '1px solid var(--figma-blue)';
             labelEl.style.color = 'var(--figma-blue)';
         });
@@ -791,7 +792,7 @@ export class PropertyPanel {
             input.style.paddingRight = '26px';
         }
 
-        // Label Dragging
+        // Label Dragging for numbers (Enhanced with Shift/Alt support)
         let isDragging = false;
         let startX = 0;
         let startVal = 0;
@@ -800,18 +801,27 @@ export class PropertyPanel {
             startX = e.clientX;
             startVal = parseFloat(input.value) || 0;
             document.body.style.cursor = 'ew-resize';
-            const onMouseMove = (me: MouseEvent) => {
+            
+            const onMouseMove = (moveEvent: MouseEvent) => {
                 if (!isDragging) return;
-                const delta = me.clientX - startX;
-                input.value = Math.round(startVal + delta).toString();
+                let delta = moveEvent.clientX - startX;
+                
+                // Support Shift for 10x, Alt for 0.1x
+                if (moveEvent.shiftKey) delta *= 10;
+                if (moveEvent.altKey) delta *= 0.1;
+
+                const newVal = startVal + delta;
+                input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
                 this.applyChange(key, input.value, 'number');
             };
+
             const onMouseUp = () => {
                 isDragging = false;
                 document.body.style.cursor = 'default';
                 window.removeEventListener('mousemove', onMouseMove);
                 window.removeEventListener('mouseup', onMouseUp);
             };
+
             window.addEventListener('mousemove', onMouseMove);
             window.addEventListener('mouseup', onMouseUp);
         });
@@ -826,7 +836,7 @@ export class PropertyPanel {
     private addCompactFieldsToContainer(container: HTMLElement, configs: { label: string, key: string }[]) {
         container.style.display = 'grid';
         container.style.gridTemplateColumns = 'repeat(2, 1fr)'; // 2 columns for X/Y and W/H
-        container.style.gap = '8px 12px';
+        container.style.gap = '4px 8px'; // Tighter gap for compact fields
         container.style.marginTop = '4px';
         container.style.padding = '4px 0';
 
@@ -861,7 +871,11 @@ export class PropertyPanel {
                 'R': '<path d="M10 6a4 4 0 1 1-4-4v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 2l2 2-2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
                 'Radius': '<path d="M2 2v2a4 4 0 0 0 4 4h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 2v8M2 10h8" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
                 'SX': '<path d="M1 6h10M3 4L1 6l2 2M9 4l2 2-2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 1v10" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
-                'SY': '<path d="M6 1v10M4 3l2-2 2 2M4 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 6h10" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>'
+                'SY': '<path d="M6 1v10M4 3l2-2 2 2M4 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 6h10" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
+                'TL': '<path d="M2 10V4C2 2.89543 2.89543 2 4 2H10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+                'TR': '<path d="M2 2H8C9.10457 2 10 2.89543 10 4V10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+                'BR': '<path d="M2 10H8C9.10457 10 10 9.10457 10 8V2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+                'BL': '<path d="M10 10H4C2.89543 10 2 9.10457 2 8V2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
             };
 
             if (icons[config.label]) {
@@ -883,7 +897,7 @@ export class PropertyPanel {
                 fontSize: '11px',
                 padding: '2px 4px',
                 outline: 'none',
-                borderRadius: '4px',
+                borderRadius: '2px', // Figma standard
                 boxSizing: 'border-box',
                 transition: 'background-color 0.15s, border-color 0.15s'
             });
@@ -918,7 +932,7 @@ export class PropertyPanel {
                 if (e.key === 'Enter') input.blur();
             });
 
-            // Label Dragging
+            // Label Dragging for compact fields (Enhanced with Shift/Alt support)
             let isDragging = false;
             let startX = 0;
             let startVal = 0;
@@ -927,18 +941,27 @@ export class PropertyPanel {
                 startX = e.clientX;
                 startVal = parseFloat(input.value) || 0;
                 document.body.style.cursor = 'ew-resize';
-                const onMouseMove = (me: MouseEvent) => {
+                
+                const onMouseMove = (moveEvent: MouseEvent) => {
                     if (!isDragging) return;
-                    const delta = me.clientX - startX;
-                    input.value = Math.round(startVal + delta).toString();
+                    let delta = moveEvent.clientX - startX;
+                    
+                    // Support Shift for 10x, Alt for 0.1x
+                    if (moveEvent.shiftKey) delta *= 10;
+                    if (moveEvent.altKey) delta *= 0.1;
+
+                    const newVal = startVal + delta;
+                    input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
                     this.applyChange(config.key, input.value, 'number');
                 };
+
                 const onMouseUp = () => {
                     isDragging = false;
                     document.body.style.cursor = 'default';
                     window.removeEventListener('mousemove', onMouseMove);
                     window.removeEventListener('mouseup', onMouseUp);
                 };
+
                 window.addEventListener('mousemove', onMouseMove);
                 window.addEventListener('mouseup', onMouseUp);
             });
@@ -985,13 +1008,15 @@ export class PropertyPanel {
         header.style.padding = '8px 12px 8px 4px';
         header.style.cursor = 'pointer';
         header.style.userSelect = 'none';
+        header.style.height = '32px';
+        header.style.boxSizing = 'border-box';
         header.style.transition = 'background-color 0.1s';
         
         const arrow = document.createElement('div');
         arrow.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
         Object.assign(arrow.style, {
-            width: '20px',
-            height: '20px',
+            width: '24px',
+            height: '24px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1003,7 +1028,7 @@ export class PropertyPanel {
 
         const titleEl = document.createElement('span');
         titleEl.innerText = title;
-        titleEl.style.fontWeight = '700';
+        titleEl.style.fontWeight = '600';
         titleEl.style.color = 'var(--figma-text-primary)';
         titleEl.style.fontSize = '11px';
         titleEl.style.flex = '1';
@@ -1016,8 +1041,8 @@ export class PropertyPanel {
         addBtn.style.display = 'flex';
         addBtn.style.alignItems = 'center';
         addBtn.style.justifyContent = 'center';
-        addBtn.style.width = '20px';
-        addBtn.style.height = '20px';
+        addBtn.style.width = '24px';
+        addBtn.style.height = '24px';
         addBtn.style.borderRadius = '2px';
         addBtn.style.transition = 'color 0.15s, background-color 0.15s';
         
@@ -1038,7 +1063,7 @@ export class PropertyPanel {
         grid.style.display = 'grid';
         grid.style.gridTemplateColumns = '1fr 1fr';
         grid.style.gap = '8px 12px';
-        grid.style.padding = '0 16px 12px 16px';
+        grid.style.padding = '4px 16px 12px 16px';
         section.appendChild(grid);
 
         header.addEventListener('mouseenter', () => {
@@ -1062,11 +1087,11 @@ export class PropertyPanel {
         const title = document.createElement('div');
         title.innerText = titleStr;
         Object.assign(title.style, {
-            padding: '8px 16px',
+            padding: '12px 16px',
             fontSize: '11px',
-            fontWeight: '700',
-            letterSpacing: '0.02em',
-            color: 'var(--figma-text-secondary)',
+            fontWeight: '600',
+            letterSpacing: '0.01em',
+            color: 'var(--figma-text-primary)',
             borderBottom: '1px solid var(--figma-border)',
             textTransform: 'uppercase'
         });
@@ -1123,7 +1148,7 @@ export class PropertyPanel {
             fontSize: '11px',
             padding: '0 4px',
             outline: 'none',
-            borderRadius: '4px',
+            borderRadius: '2px',
             boxSizing: 'border-box',
             cursor: 'pointer',
             appearance: 'none',
@@ -1159,7 +1184,7 @@ export class PropertyPanel {
         });
 
         select.addEventListener('focus', () => {
-            select.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+            select.style.backgroundColor = 'var(--figma-active-bg)';
             select.style.border = '1px solid var(--figma-blue)';
             labelEl.style.color = 'var(--figma-blue)';
             arrow.style.color = 'var(--figma-blue)';
@@ -1197,7 +1222,7 @@ export class PropertyPanel {
         const container = document.createElement('div');
         container.style.display = 'flex';
         container.style.alignItems = 'center';
-        container.style.height = '28px';
+        container.style.height = '32px';
         container.style.position = 'relative';
 
         // Icon or Label
@@ -1225,7 +1250,10 @@ export class PropertyPanel {
             'R': '<path d="M10 6a4 4 0 1 1-4-4v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 2l2 2-2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
             'SX': '<path d="M1 6h10M3 4L1 6l2 2M9 4l2 2-2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 1v10" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
             'SY': '<path d="M6 1v10M4 3l2-2 2 2M4 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 6h10" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
-            'Radius': '<path d="M2 2v2a4 4 0 0 0 4 4h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 2v8M2 10h8" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>'
+            'Radius': '<path d="M2 2v2a4 4 0 0 0 4 4h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 2v8M2 10h8" stroke="currentColor" stroke-width="1" stroke-dasharray="1 1"/>',
+            'Color': '<rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>',
+            'Fill': '<rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.2"/>',
+            'Weight': '<path d="M2 6h8M2 3h8M2 9h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
         };
 
         if (icons[label]) {
@@ -1242,7 +1270,7 @@ export class PropertyPanel {
         inputWrapper.style.display = 'flex';
         inputWrapper.style.alignItems = 'center';
         inputWrapper.style.position = 'relative';
-        inputWrapper.style.height = '100%';
+        inputWrapper.style.height = '24px'; // Standard Figma input height
         container.appendChild(inputWrapper);
 
         const input = document.createElement('input');
@@ -1254,13 +1282,14 @@ export class PropertyPanel {
         Object.assign(input.style, {
             flex: '1',
             width: '100%',
+            height: '100%',
             backgroundColor: 'transparent',
             border: '1px solid transparent',
             color: 'var(--figma-text-primary)',
             fontSize: '11px',
-            padding: '4px 4px',
+            padding: '0 4px',
             outline: 'none',
-            borderRadius: '4px',
+            borderRadius: '2px',
             boxSizing: 'border-box',
             transition: 'background-color 0.15s, border-color 0.15s'
         });
@@ -1270,20 +1299,16 @@ export class PropertyPanel {
 
         // Color Picker specific refinements
         if (type === 'color') {
-            labelEl.style.width = '32px';
-            labelEl.style.justifyContent = 'center';
-            
             const colorPreview = document.createElement('div');
             Object.assign(colorPreview.style, {
                 width: '16px',
                 height: '16px',
                 borderRadius: '2px',
-                border: '1px solid var(--figma-border-medium)',
+                border: '1px solid var(--figma-border)',
                 marginRight: '8px',
                 cursor: 'pointer',
                 flexShrink: '0',
                 position: 'relative',
-                boxShadow: 'var(--figma-shadow-sm)',
                 backgroundColor: '#ffffff'
             });
 
@@ -1319,39 +1344,36 @@ export class PropertyPanel {
             opacityInput.value = '100%';
             Object.assign(opacityInput.style, {
                 width: '36px',
+                height: '100%',
                 backgroundColor: 'transparent',
                 border: '1px solid transparent',
-                color: 'var(--figma-text-tertiary)',
-                fontSize: '10px',
+                color: 'var(--figma-text-secondary)',
+                fontSize: '11px',
                 textAlign: 'right',
                 outline: 'none',
                 marginLeft: '4px',
-                padding: '2px 4px',
-                borderRadius: '4px',
+                padding: '0 4px',
+                borderRadius: '2px',
                 transition: 'color 0.15s, background-color 0.15s'
             });
 
             opacityInput.addEventListener('mouseenter', () => {
                 if (document.activeElement !== opacityInput) {
                     opacityInput.style.backgroundColor = 'var(--figma-hover-bg)';
-                    opacityInput.style.color = 'var(--figma-text-secondary)';
                 }
             });
             opacityInput.addEventListener('mouseleave', () => {
                 if (document.activeElement !== opacityInput) {
                     opacityInput.style.backgroundColor = 'transparent';
-                    opacityInput.style.color = 'var(--figma-text-tertiary)';
                 }
             });
             opacityInput.addEventListener('focus', () => {
                 opacityInput.style.backgroundColor = 'var(--figma-active-bg)';
                 opacityInput.style.border = '1px solid var(--figma-blue)';
-                opacityInput.style.color = 'var(--figma-text-primary)';
             });
             opacityInput.addEventListener('blur', () => {
                 opacityInput.style.backgroundColor = 'transparent';
                 opacityInput.style.border = '1px solid transparent';
-                opacityInput.style.color = 'var(--figma-text-tertiary)';
                 
                 let val = parseInt(opacityInput.value);
                 if (isNaN(val)) val = 100;
@@ -1404,7 +1426,7 @@ export class PropertyPanel {
 
         this.fields[key] = input;
 
-        // Label Dragging for numbers
+        // Label Dragging for numbers (Enhanced with Shift/Alt support)
         if (type === 'number') {
             let isDragging = false;
             let startX = 0;
@@ -1418,9 +1440,14 @@ export class PropertyPanel {
                 
                 const onMouseMove = (moveEvent: MouseEvent) => {
                     if (!isDragging) return;
-                    const delta = moveEvent.clientX - startX;
+                    let delta = moveEvent.clientX - startX;
+                    
+                    // Support Shift for 10x, Alt for 0.1x
+                    if (moveEvent.shiftKey) delta *= 10;
+                    if (moveEvent.altKey) delta *= 0.1;
+
                     const newVal = startVal + delta;
-                    input.value = Math.round(newVal).toString();
+                    input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
                     this.applyChange(key, input.value, 'number');
                 };
 

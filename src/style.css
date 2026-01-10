@@ -97,6 +97,34 @@ html, body {
   color: #888;
 }
 
+/* Ruler styles */
+.ruler {
+  position: absolute;
+  z-index: 100;
+  pointer-events: auto;
+  background-color: var(--figma-bg-panel);
+}
+
+.ruler.horizontal {
+  top: 0;
+  left: 0;
+  border-bottom: 1px solid var(--figma-border);
+}
+
+.ruler.vertical {
+  top: 0;
+  left: 0;
+  border-right: 1px solid var(--figma-border);
+}
+
+.ruler.corner {
+  top: 0;
+  left: 0;
+  z-index: 101;
+  border-right: 1px solid var(--figma-border);
+  border-bottom: 1px solid var(--figma-border);
+}
+
 button {
   border-radius: 8px;
   border: 1px solid transparent;
