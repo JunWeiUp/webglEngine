@@ -30,7 +30,7 @@ export class InteractionManager {
     // 回调函数：当节点变换发生变化时触发 (如拖拽、缩放)
     public onTransformChange: (() => void) | null = null;
     // 回调函数：用于创建新节点
-    public onCreateNode: ((type: 'frame' | 'image', x: number, y: number, w: number, h: number, parent: Node) => Node) | null = null;
+    public onCreateNode: ((type: 'frame' | 'image' | 'text', x: number, y: number, w: number, h: number, parent: Node) => Node) | null = null;
 
     // 状态标记
     private isPanning: boolean = false;
@@ -113,13 +113,15 @@ export class InteractionManager {
             mousedown: this.onMouseDown.bind(this),
             mousemove: this.onMouseMove.bind(this),
             mouseup: this.onMouseUp.bind(this),
-            wheel: this.onWheel.bind(this)
+            wheel: this.onWheel.bind(this),
+            keydown: this.onKeyDown.bind(this)
         };
 
         canvas.addEventListener('mousedown', this._handlers.mousedown);
         canvas.addEventListener('mousemove', this._handlers.mousemove);
         canvas.addEventListener('mouseup', this._handlers.mouseup);
         canvas.addEventListener('wheel', this._handlers.wheel, { passive: false });
+        window.addEventListener('keydown', this._handlers.keydown);
     }
 
     /**
@@ -131,11 +133,103 @@ export class InteractionManager {
         canvas.removeEventListener('mousemove', this._handlers.mousemove);
         canvas.removeEventListener('mouseup', this._handlers.mouseup);
         canvas.removeEventListener('wheel', this._handlers.wheel);
+        window.removeEventListener('keydown', this._handlers.keydown);
 
         this._handlers = {};
         this.onStructureChange = null;
         this.onSelectionChange = null;
         this.onHoverChange = null;
+    }
+
+    /**
+     * 键盘按下事件处理
+     */
+    private onKeyDown(e: KeyboardEvent) {
+        // 如果正在输入，则不触发快捷键
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
+            return;
+        }
+
+        const key = e.key.toLowerCase();
+        const isShift = e.shiftKey;
+        const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+
+        // 1. 工具切换
+        if (!isCmdOrCtrl) {
+            switch (key) {
+                case 'v':
+                    this.engine.activeTool = null;
+                    this.engine.toolbar.updateAllButtons();
+                    this.engine.toolbar.updatePosition();
+                    this.engine.requestRender();
+                    break;
+                case 'f':
+                    this.engine.activeTool = 'frame';
+                    this.engine.toolbar.updateAllButtons();
+                    this.engine.toolbar.updatePosition();
+                    this.engine.requestRender();
+                    break;
+                case 'i':
+                    this.engine.activeTool = 'image';
+                    this.engine.toolbar.updateAllButtons();
+                    this.engine.toolbar.updatePosition();
+                    this.engine.requestRender();
+                    break;
+                case 't':
+                    this.engine.activeTool = 'text';
+                    this.engine.toolbar.updateAllButtons();
+                    this.engine.toolbar.updatePosition();
+                    this.engine.requestRender();
+                    break;
+                case 'escape':
+                    this.engine.activeTool = null;
+                    this.auxLayer.selectedNodes.clear();
+                    this.engine.toolbar.updateAllButtons();
+                    this.engine.toolbar.updatePosition();
+                    if (this.onSelectionChange) this.onSelectionChange();
+                    this.engine.requestRender();
+                    break;
+            }
+        }
+
+        // 2. 节点删除
+        if (key === 'backspace' || key === 'delete') {
+            if (this.auxLayer.selectedNodes.size > 0) {
+                const nodesToRemove = Array.from(this.auxLayer.selectedNodes);
+                nodesToRemove.forEach(node => {
+                    if (node.parent) {
+                        node.parent.removeChild(node);
+                    }
+                });
+                this.auxLayer.selectedNodes.clear();
+                if (this.onSelectionChange) this.onSelectionChange();
+                if (this.onStructureChange) this.onStructureChange();
+                this.engine.requestRender();
+            }
+        }
+
+        // 3. 节点移动 (方向键)
+        const isArrowKey = ['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key);
+        if (isArrowKey && this.auxLayer.selectedNodes.size > 0) {
+            e.preventDefault();
+            const step = isShift ? 10 : 1;
+            let dx = 0;
+            let dy = 0;
+
+            switch (key) {
+                case 'arrowup': dy = -step; break;
+                case 'arrowdown': dy = step; break;
+                case 'arrowleft': dx = -step; break;
+                case 'arrowright': dx = step; break;
+            }
+
+            this.auxLayer.selectedNodes.forEach(node => {
+                node.setPosition(node.x + dx, node.y + dy);
+            });
+            
+            if (this.onTransformChange) this.onTransformChange();
+            this.engine.requestRender();
+        }
     }
 
     /**
@@ -386,7 +480,7 @@ export class InteractionManager {
     /**
      * 开始拖拽创建 (用于从工具栏直接拖拽)
      */
-    public startDragCreation(type: 'frame' | 'image', screenPos: vec2) {
+    public startDragCreation(type: 'frame' | 'image' | 'text', screenPos: vec2) {
         // 先转换为画布局部坐标
         const canvasPos = this.getMousePos({ clientX: screenPos[0], clientY: screenPos[1] } as MouseEvent, this._tempVec2a);
         const worldPos = this.getWorldMousePos(canvasPos, this._tempVec2b);
@@ -413,8 +507,11 @@ export class InteractionManager {
                 }
             }
 
-            // 拖拽创建时，默认大小 100x100，中心跟随鼠标
+            // 拖拽创建时，使用节点默认大小，中心跟随鼠标
             this.creationNode = this.onCreateNode(type, worldPos[0] - 50, worldPos[1] - 50, 100, 100, hitParent);
+            if (this.creationNode) {
+                this.creationNode.setPosition(worldPos[0] - this.creationNode.width / 2, worldPos[1] - this.creationNode.height / 2);
+            }
             this.renderer.ctx.canvas.style.cursor = 'crosshair';
             this.scene.invalidate();
         }
@@ -490,7 +587,7 @@ export class InteractionManager {
             this.creationNode.set(x, y, w, h);
         } else {
             // 从工具栏直接拖拽创建：跟随鼠标中心
-            this.creationNode.setPosition(end[0] - 50, end[1] - 50);
+            this.creationNode.setPosition(end[0] - this.creationNode.width / 2, end[1] - this.creationNode.height / 2);
         }
     }
 
@@ -562,39 +659,54 @@ export class InteractionManager {
             return;
         }
 
-        if (e.shiftKey) {
-            this.isBoxSelecting = true;
-            vec2.copy(this.boxSelectStart, worldPos);
-            this.auxLayer.selectionRect = { start: vec2.clone(worldPos), end: vec2.clone(worldPos) };
-            this.auxLayer.selectedNodes.clear();
-            this.scene.invalidate();
-            return;
-        }
-
         const hit = this.hitTest(this.scene, worldPos);
 
         if (hit) {
-            if (this.auxLayer.selectedNodes.has(hit)) {
-                this.auxLayer.draggingNode = hit;
-                vec2.copy(this.auxLayer.dragProxyPos, worldPos);
-
-                // 记录所有选中节点的起始状态
-                this.auxLayer.selectedNodes.forEach(node => {
-                    this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
-                });
-            } else {
-                this.auxLayer.selectedNodes.clear();
-                this.auxLayer.selectedNodes.add(hit);
-                this.auxLayer.draggingNode = hit;
-                vec2.copy(this.auxLayer.dragProxyPos, worldPos);
-
-                this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
+            if (e.shiftKey) {
+                // Shift + Click: Toggle selection
+                if (this.auxLayer.selectedNodes.has(hit)) {
+                    this.auxLayer.selectedNodes.delete(hit);
+                } else {
+                    this.auxLayer.selectedNodes.add(hit);
+                    this.auxLayer.draggingNode = hit;
+                    vec2.copy(this.auxLayer.dragProxyPos, worldPos);
+                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
+                }
                 if (this.onSelectionChange) this.onSelectionChange();
+            } else {
+                // Normal Click
+                if (this.auxLayer.selectedNodes.has(hit)) {
+                    this.auxLayer.draggingNode = hit;
+                    vec2.copy(this.auxLayer.dragProxyPos, worldPos);
+
+                    // 记录所有选中节点的起始状态
+                    this.auxLayer.selectedNodes.forEach(node => {
+                        this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
+                    });
+                } else {
+                    this.auxLayer.selectedNodes.clear();
+                    this.auxLayer.selectedNodes.add(hit);
+                    this.auxLayer.draggingNode = hit;
+                    vec2.copy(this.auxLayer.dragProxyPos, worldPos);
+
+                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
+                    if (this.onSelectionChange) this.onSelectionChange();
+                }
             }
         } else {
-            this.auxLayer.selectedNodes.clear();
-            this.isPanning = true;
-            if (this.onSelectionChange) this.onSelectionChange();
+            if (!e.shiftKey) {
+                this.auxLayer.selectedNodes.clear();
+                this.isPanning = true;
+                if (this.onSelectionChange) this.onSelectionChange();
+            } else {
+                // Shift + Click on empty area: Start Box Selection
+                this.isBoxSelecting = true;
+                vec2.copy(this.boxSelectStart, worldPos);
+                this.auxLayer.selectionRect = { start: vec2.clone(worldPos), end: vec2.clone(worldPos) };
+                // Keep current selection for Shift + Box Select if desired, 
+                // but let's stick to standard behavior: box select clears and starts new
+                this.auxLayer.selectedNodes.clear();
+            }
         }
         this.scene.invalidate();
     }
@@ -1055,10 +1167,12 @@ export class InteractionManager {
             this.isCreating = false;
             this.isFixedSizeCreation = false; // 重置模式
             if (this.creationNode) {
-                // 如果是画布点击创建模式（有激活工具）且最终尺寸过小，则应用 100x100 的默认尺寸
+                // 如果是画布点击创建模式（有激活工具）且最终尺寸过小，则应用默认尺寸并居中
                 if (this.engine.activeTool && this.creationNode.width < 5 && this.creationNode.height < 5) {
-                    // 使用节点当前的局部坐标进行偏移，确保在嵌套情况下位置依然正确
-                    this.creationNode.set(this.creationNode.x - 50, this.creationNode.y - 50, 100, 100);
+                    // 使用节点默认的宽高进行居中偏移
+                    const defaultW = this.engine.activeTool === 'text' ? this.creationNode.width : 100;
+                    const defaultH = this.engine.activeTool === 'text' ? this.creationNode.height : 100;
+                    this.creationNode.set(this.creationNode.x - defaultW / 2, this.creationNode.y - defaultH / 2, defaultW, defaultH);
                 }
 
                 // 创建完成后，默认选中新节点

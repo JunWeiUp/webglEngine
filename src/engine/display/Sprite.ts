@@ -33,6 +33,44 @@ export class Sprite extends Node {
             TextureManager.disposeTexture(Renderer.instance.gl, this._textureUrl);
         }
         this._texture = value;
+        this.invalidate();
+    }
+
+    /** 纹理的 URL 地址 */
+    public get textureUrl(): string | null {
+        return this._textureUrl;
+    }
+
+    public set textureUrl(url: string | null) {
+        if (this._textureUrl === url) return;
+
+        // 如果旧纹理存在且有 URL，则先释放旧纹理引用
+        if (this._texture && this._textureUrl && Renderer.instance) {
+            TextureManager.disposeTexture(Renderer.instance.gl, this._textureUrl);
+            this._texture = null;
+        }
+
+        this._textureUrl = url;
+        
+        if (url && Renderer.instance) {
+            this._isLoading = true;
+            TextureManager.loadTexture(Renderer.instance.gl, url).then(texture => {
+                if (this._textureUrl === url) {
+                    this._texture = texture;
+                    this._isLoading = false;
+                    // 如果没有设置宽高，则使用纹理宽高
+                    if (this.width === 100 && this.height === 100) {
+                        this.set(this.x, this.y, texture.width, texture.height);
+                    }
+                    this.invalidate();
+                }
+            }).catch(err => {
+                console.error(`Failed to load texture: ${url}`, err);
+                this._isLoading = false;
+            });
+        }
+        
+        this.invalidate();
     }
     
     // --- 颜色属性优化 ---

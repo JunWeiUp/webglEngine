@@ -3,6 +3,7 @@ import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { PropertyPanel } from './ui/PropertyPanel';
+import { Toolbar } from './ui/Toolbar';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
@@ -26,9 +27,10 @@ export class Engine {
     public interaction: InteractionManager;
     public outline: OutlineView;
     public propertyPanel: PropertyPanel;
+    public toolbar: Toolbar;
     public auxLayer: AuxiliaryLayer;
     public alwaysRender: boolean = false;
-    public activeTool: 'frame' | 'image' | null = null;
+    public activeTool: 'frame' | 'image' | 'text' | null = null;
     private container: HTMLElement;
 
     // 渲染请求 ID (防抖动)
@@ -81,6 +83,9 @@ export class Engine {
             this.requestRender();
         };
 
+        // 初始化工具栏
+        this.toolbar = new Toolbar(this);
+
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
@@ -90,10 +95,11 @@ export class Engine {
         // 监听选中/悬停变化，更新大纲视图高亮
         this.interaction.onSelectionChange = () => {
             this.outline.updateHighlight();
-            this.propertyPanel.updateNode(this.auxLayer.selectedNode);
+            this.propertyPanel.updateNodes(this.auxLayer.selectedNodes);
+            this.toolbar.updatePosition();
             
             // 更新容器布局：选中节点时显示属性栏，容器向左收缩
-            if (this.auxLayer.selectedNode) {
+            if (this.auxLayer.selectedNodes.size > 0) {
                 this.container.style.right = '240px';
             } else {
                 this.container.style.right = '0';
@@ -105,9 +111,9 @@ export class Engine {
             this.requestRender();
         };
         this.interaction.onTransformChange = () => {
-            this.propertyPanel.updateNode(this.auxLayer.selectedNode);
+            this.propertyPanel.updateNodes(this.auxLayer.selectedNodes);
             // 变换时也确保布局正确
-            if (this.auxLayer.selectedNode) {
+            if (this.auxLayer.selectedNodes.size > 0) {
                 this.container.style.right = '240px';
             }
             const rect = this.container.getBoundingClientRect();

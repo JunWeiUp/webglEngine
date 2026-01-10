@@ -1,5 +1,6 @@
 import './style.css'
 import { Engine } from './engine/Engine';
+import { Node } from './engine/display/Node';
 import { TileLayer } from './engine/display/TileLayer';
 import { Sprite } from './engine/display/Sprite';
 import { Text } from './engine/display/Text';
@@ -108,7 +109,7 @@ function loadBatch() {
         for (let j = 0; j < totalCols; j++) {
             const container = new Container(engine.renderer.gl);
             container.name = "MyContainer";
-            container.transform.setPosition(500 * i, 500 * j);
+            container.setPosition(500 * i, 500 * j);
             container.interactive = true;
             // container.width = 400;
             // container.height = 400;
@@ -138,19 +139,17 @@ function loadBatch() {
 
             // 3. Add Sprites with generated images
             const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
-            sprite1.transform.setPosition(50, 50);
-            // sprite1.width = 100;
-            // sprite1.height = 100;
-            sprite1.set(sprite1.x, sprite1.y, 100, 100);
+            sprite1.setPosition(50, 50);
+            sprite1.width = 100;
+            sprite1.height = 100;
             sprite1.interactive = true;
             sprite1.name = "Sprite"+i+"_"+j;
             container.addChild(sprite1, true);
 
             const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
-            sprite2.transform.setPosition(200, 50);
-            // sprite2.width = 100;
-            // sprite2.height = 100;
-            sprite2.set(sprite2.x, sprite2.y, 100, 100);
+            sprite2.setPosition(200, 50);
+            sprite2.width = 100;
+            sprite2.height = 100;
 
             sprite2.interactive = true;
             sprite2.name = "Sprite"+i+"_"+j;    
@@ -158,7 +157,7 @@ function loadBatch() {
 
             // 4. Add Text (Canvas2D)
             const text = new Text("HelloText "+i+"_"+j);
-            text.transform.setPosition(50, 200);
+            text.setPosition(50, 200);
             text.fontSize = 30;
             text.fillStyle = "red";
             text.interactive = true;
@@ -181,7 +180,7 @@ function loadBatch() {
         // engine.scene.removeChild(loadingText);
 
         const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
-        instruction.transform.setPosition(20, 20);
+        instruction.setPosition(20, 20);
         instruction.fontSize = 16;
         instruction.fillStyle = "black";
         instruction.name = "Instructions";
@@ -193,14 +192,14 @@ function loadBatch() {
         // 5. 添加特效演示节点
         const effectContainer = new Container(engine.renderer.gl);
         effectContainer.name = "EffectDemoContainer";
-        effectContainer.transform.setPosition(20, 100);
+        effectContainer.setPosition(20, 100);
         effectContainer.set(20, 100, 800, 600);
         engine.scene.addChild(effectContainer);
 
         // 5.1 外阴影 + 圆角
         const rect1 = new Container(engine.renderer.gl);
         rect1.name = "OuterShadowRect";
-        rect1.transform.setPosition(50, 50);
+        rect1.setPosition(50, 50);
         rect1.set(50, 50, 200, 150);
         rect1.style = {
             backgroundColor: [1, 1, 1, 1],
@@ -224,7 +223,7 @@ function loadBatch() {
         // 5.2 内阴影 + 渐变背景 (渐变通过样式扩展，目前先用纯色)
         const rect2 = new Container(engine.renderer.gl);
         rect2.name = "InnerShadowRect";
-        rect2.transform.setPosition(300, 50);
+        rect2.setPosition(300, 50);
         rect2.set(300, 50, 200, 150);
         rect2.style = {
             backgroundColor: [0.2, 0.6, 1, 1],
@@ -244,7 +243,7 @@ function loadBatch() {
         // 5.3 背景模糊 (毛玻璃)
         const rect3 = new Container(engine.renderer.gl);
         rect3.name = "Glass Card";
-        rect3.transform.setPosition(50, 250);
+        rect3.setPosition(50, 250);
         rect3.set(50, 250, 450, 200);
         rect3.style = {
             backgroundColor: [1, 1, 1, 0.2],
@@ -266,7 +265,7 @@ function loadBatch() {
         effectContainer.addChild(rect3);
 
         const glassText = new Text("Glassmorphism Effect");
-        glassText.transform.setPosition(20, 20);
+        glassText.setPosition(20, 20);
         glassText.fontSize = 24;
         glassText.fillStyle = "white";
         rect3.addChild(glassText);
@@ -300,48 +299,11 @@ requestAnimationFrame(loadBatch);
 
 console.log("Engine started");
 
-// ==========================================
-// UI Logic: Figma-style Toolbar at bottom center
-// ==========================================
-
-const toolbar = document.createElement('div');
-Object.assign(toolbar.style, {
-    position: 'absolute',
-    bottom: '24px',
-    left: 'calc(250px + (100% - 250px) / 2)',
-    transform: 'translateX(-50%)',
-    height: '40px',
-    backgroundColor: '#2c2c2c',
-    borderRadius: '8px',
-    display: 'flex',
-    alignItems: 'center',
-    padding: '0 4px',
-    gap: '2px',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.05)',
-    zIndex: '1000',
-    userSelect: 'none',
-    transition: 'left 0.3s ease' // Smooth move when property panel toggles
-});
-document.body.appendChild(toolbar);
-
-// Update toolbar position when selection changes (because canvas size changes)
-const originalOnSelectionChange = engine.interaction.onSelectionChange;
-engine.interaction.onSelectionChange = () => {
-    if (originalOnSelectionChange) originalOnSelectionChange();
-    
-    // Adjust toolbar position based on whether property panel is shown
-    if (engine.auxLayer.selectedNode) {
-        toolbar.style.left = 'calc(250px + (100% - 250px - 240px) / 2)';
-    } else {
-        toolbar.style.left = 'calc(250px + (100% - 250px) / 2)';
-    }
-};
-
 // ---------------------------------------------------------
 // Node Creation Logic
 // ---------------------------------------------------------
 
-engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
+engine.interaction.onCreateNode = (type: 'frame' | 'image' | 'text', x: number, y: number, w: number, h: number, parent: Node) => {
     // 1. 将世界坐标转换为父节点的局部坐标
     const localPos = [x, y];
     
@@ -363,7 +325,7 @@ engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
         }
     }
 
-    let node;
+    let node: Node | null = null;
     if (type === 'frame') {
         const container = new Container(engine.renderer.gl);
         container.name = `Frame_${Math.floor(Math.random() * 1000)}`;
@@ -371,7 +333,7 @@ engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
         container.set(localPos[0], localPos[1], w, h);
         container.color = new Float32Array([0.2, 0.6, 1.0, 0.5]);
         node = container;
-    } else {
+    } else if (type === 'image') {
         const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
         const url = createDebugImage("Image", color, 100, 100);
         const sprite = new Sprite(engine.renderer.gl, url);
@@ -379,6 +341,14 @@ engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
         sprite.name = `Image_${Math.floor(Math.random() * 1000)}`;
         sprite.set(localPos[0], localPos[1], w, h);
         node = sprite;
+    } else if (type === 'text') {
+        const textNode = new Text("New Text");
+        textNode.interactive = true;
+        textNode.name = `Text_${Math.floor(Math.random() * 1000)}`;
+        textNode.setPosition(localPos[0], localPos[1]);
+        textNode.fontSize = 24;
+        textNode.fillStyle = "#ffffff";
+        node = textNode;
     }
 
     if (node) {
@@ -387,80 +357,8 @@ engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
         targetParent.addChild(node);
         engine.outline.update();
     }
-    return node;
+    return node!;
 };
-
-function createToolbarButton(label: string, icon: string, type: 'frame' | 'image') {
-    const btn = document.createElement('div');
-    btn.draggable = true; // Enable HTML5 drag and drop
-    Object.assign(btn.style, {
-        height: '32px',
-        padding: '0 12px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '6px',
-        color: '#e0e0e0',
-        fontSize: '12px',
-        cursor: 'pointer',
-        borderRadius: '4px',
-        transition: 'background-color 0.2s',
-        whiteSpace: 'nowrap'
-    });
-
-    btn.innerHTML = `<span style="font-size: 16px;">${icon}</span> <span>${label}</span>`;
-
-    btn.addEventListener('mouseenter', () => {
-        btn.style.backgroundColor = '#444';
-    });
-    btn.addEventListener('mouseleave', () => {
-        if (engine.activeTool !== type) {
-            btn.style.backgroundColor = 'transparent';
-        }
-    });
-
-    // 1. Click to enter creation mode (draw size on canvas)
-    btn.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        if (engine.activeTool === type) {
-            engine.activeTool = null;
-            btn.style.backgroundColor = 'transparent';
-        } else {
-            engine.activeTool = type;
-            // Clear other buttons' background if needed, but here we just set this one
-            btn.style.backgroundColor = '#444';
-        }
-    });
-
-    // 2. Drag to create 100x100 element following mouse
-    btn.addEventListener('dragstart', (e) => {
-        // Set drag image to empty/transparent to avoid default ghost image
-        const img = new Image();
-        img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-        e.dataTransfer?.setDragImage(img, 0, 0);
-        
-        // Use engine interaction to start drag creation
-        engine.interaction.startDragCreation(type, [e.clientX, e.clientY]);
-    });
-
-    btn.addEventListener('drag', (e) => {
-        if (e.clientX === 0 && e.clientY === 0) return; // Ignore final drag event
-        engine.interaction.updateDragCreation([e.clientX, e.clientY]);
-    });
-
-    btn.addEventListener('dragend', (e) => {
-        engine.interaction.endDragCreation([e.clientX, e.clientY]);
-    });
-
-    toolbar.appendChild(btn);
-    return btn;
-}
-
-// 1. Add Container Button
-createToolbarButton("Frame", "⬜", 'frame');
-
-// 2. Add Sprite Button
-createToolbarButton("Image", "🖼️", 'image');
 
 // ==========================================
 // Performance Stats & Debug Tools

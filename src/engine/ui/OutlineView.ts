@@ -9,7 +9,6 @@ interface OutlineItem {
 }
 
 import { Renderer } from '../core/Renderer';
-import { vec2 } from 'gl-matrix';
 import { InteractionManager } from '../events/InteractionManager';
 
 export class OutlineView {
@@ -20,7 +19,6 @@ export class OutlineView {
 
     private rootNode: Node;
     private auxLayer: AuxiliaryLayer;
-    private renderer: Renderer;
     private interaction: InteractionManager;
     
     // Flattened list of visible nodes (not collapsed by parent)
@@ -30,7 +28,6 @@ export class OutlineView {
     private expandedNodes: Set<Node> = new Set();
     
     private itemHeight: number = 24; // px
-    private visibleCount: number = 0;
     
     // Cache map for updating highlight without full re-render
     // Key: Node, Value: DOM Element currently rendered
@@ -39,7 +36,6 @@ export class OutlineView {
     constructor(rootNode: Node, auxLayer: AuxiliaryLayer, renderer: Renderer, interaction: InteractionManager) {
         this.rootNode = rootNode;
         this.auxLayer = auxLayer;
-        this.renderer = renderer;
         this.interaction = interaction;
         
         // Default expand root
@@ -58,22 +54,25 @@ export class OutlineView {
         this.container.style.left = '0';
         this.container.style.width = '250px';
         this.container.style.height = '100vh';
-        this.container.style.backgroundColor = '#2c2c2c';
-        this.container.style.borderRight = '1px solid #444';
-        this.container.style.color = '#e0e0e0';
+        this.container.style.backgroundColor = 'var(--figma-bg-panel)';
+        this.container.style.borderRight = '1px solid var(--figma-border)';
+        this.container.style.color = 'var(--figma-text-primary)';
         this.container.style.display = 'flex';
         this.container.style.flexDirection = 'column';
         this.container.style.zIndex = '1000';
-        this.container.style.fontFamily = 'monospace';
-        this.container.style.fontSize = '12px';
+        this.container.style.fontFamily = 'inherit';
+        this.container.style.fontSize = '11px';
         this.container.style.userSelect = 'none';
 
         const title = document.createElement('div');
-        title.innerText = "大纲树 (Virtual Scroll)";
-        title.style.fontWeight = 'bold';
-        title.style.padding = '10px';
-        title.style.borderBottom = '1px solid #444';
+        title.innerText = "LAYERS";
+        title.style.fontSize = '11px';
+        title.style.fontWeight = '600';
+        title.style.padding = '12px 16px 8px 16px';
+        title.style.color = 'var(--figma-text-tertiary)';
         title.style.flexShrink = '0';
+        title.style.letterSpacing = '0.02em';
+        title.style.userSelect = 'none';
         this.container.appendChild(title);
 
         this.scrollContainer = document.createElement('div');
@@ -246,76 +245,180 @@ export class OutlineView {
         // 重置样式和内容
         div.innerHTML = ''; // 清空旧内容
         div.onclick = null;
-        div.onmouseover = null;
-        div.onmouseout = null;
+        div.onmouseenter = null;
+        div.onmouseleave = null;
         
         div.style.height = `${this.itemHeight}px`;
         div.style.lineHeight = `${this.itemHeight}px`;
-        div.style.paddingLeft = `${item.depth * 15 + 5}px`;
-        div.style.cursor = 'pointer';
+        div.style.paddingLeft = `${item.depth * 16 + 8}px`;
+        div.style.paddingRight = '8px';
+        div.style.cursor = 'default';
         div.style.whiteSpace = 'nowrap';
         div.style.overflow = 'hidden';
         div.style.textOverflow = 'ellipsis';
         div.style.display = 'flex';
         div.style.alignItems = 'center';
-        div.style.color = '#cccccc'; // Default color reset
-        div.style.backgroundColor = 'transparent'; // Reset bg
+        div.style.color = 'var(--figma-text-secondary)';
+        div.style.backgroundColor = 'transparent';
+        div.style.fontSize = '11px';
+        div.style.transition = 'background-color 0.1s, color 0.1s';
 
-        // Toggle Icon
-        const toggleSpan = document.createElement('span');
-        toggleSpan.style.display = 'inline-block';
-        toggleSpan.style.width = '12px';
-        toggleSpan.style.textAlign = 'center';
-        toggleSpan.style.marginRight = '4px';
-        toggleSpan.style.cursor = 'pointer';
+        // Toggle Icon (SVG)
+        const toggleBtn = document.createElement('div');
+        Object.assign(toggleBtn.style, {
+            width: '16px',
+            height: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: '4px',
+            borderRadius: '2px',
+            color: 'var(--figma-text-tertiary)',
+            transition: 'color 0.15s',
+            cursor: 'pointer'
+        });
         
         if (item.hasChildren) {
-            toggleSpan.innerText = item.isExpanded ? '▼' : '▶';
-            toggleSpan.onclick = (e) => {
+            toggleBtn.innerHTML = `<svg width="8" height="8" viewBox="0 0 8 8" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: ${item.isExpanded ? 'rotate(90deg)' : 'none'}; transition: transform 0.1s ease;">
+                <path d="M2.5 1.5L5.5 4L2.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+            toggleBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.toggleExpand(item.node);
             };
-        } else {
-            toggleSpan.innerText = '•';
-            toggleSpan.style.color = '#666';
+            toggleBtn.onmouseenter = () => toggleBtn.style.color = 'var(--figma-text-primary)';
+            toggleBtn.onmouseleave = () => toggleBtn.style.color = 'var(--figma-text-tertiary)';
         }
-        div.appendChild(toggleSpan);
+        div.appendChild(toggleBtn);
+
+        // Type Icon
+        const typeIcon = document.createElement('div');
+        Object.assign(typeIcon.style, {
+            width: '16px',
+            height: '16px',
+            marginRight: '6px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--figma-text-tertiary)',
+            flexShrink: '0'
+        });
+        
+        const typeName = item.node.constructor.name;
+        if (typeName === 'Sprite') {
+            typeIcon.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="9" height="9" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 8.5l2.5-2.5 2.5 2.5M6.5 7.5l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="4" cy="4" r="1" fill="currentColor"/></svg>`;
+        } else if (typeName === 'Text') {
+            typeIcon.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 3.5V2.5h7v1M6 2.5V9.5M4.5 9.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`;
+        } else if (typeName === 'Container') {
+            // Figma Frame Icon (Hash-like)
+            typeIcon.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 1.5v9M8 1.5v9M1.5 4h9M1.5 8h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`;
+        } else {
+            typeIcon.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="2" width="8" height="8" rx="0.5" stroke="currentColor" stroke-width="1.2"/></svg>`;
+        }
+        div.appendChild(typeIcon);
 
         // Node Name
         const nameSpan = document.createElement('span');
-        const typeName = item.node.constructor.name;
-        const name = item.node.name || "Unnamed";
-        nameSpan.innerText = `[${typeName}] ${name}`;
+        nameSpan.innerText = item.node.name || (typeName === 'Container' ? "Frame" : typeName);
+        nameSpan.style.flex = '1';
+        nameSpan.style.overflow = 'hidden';
+        nameSpan.style.textOverflow = 'ellipsis';
+        nameSpan.style.whiteSpace = 'nowrap';
+        nameSpan.style.userSelect = 'none';
+        nameSpan.style.fontWeight = item.node.locked ? '400' : '500';
         div.appendChild(nameSpan);
+
+        // Action Buttons Container
+        const actionsContainer = document.createElement('div');
+        Object.assign(actionsContainer.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '2px',
+            flexShrink: '0'
+        });
+        div.appendChild(actionsContainer);
+
+        // Lock Toggle
+        const lockBtn = document.createElement('div');
+        const isLocked = item.node.locked;
+        Object.assign(lockBtn.style, {
+            width: '20px',
+            height: '20px',
+            display: isLocked ? 'flex' : 'none',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: isLocked ? 'var(--figma-text-primary)' : 'var(--figma-text-tertiary)',
+            cursor: 'pointer',
+            borderRadius: '2px'
+        });
+        lockBtn.innerHTML = isLocked 
+            ? `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 5V4C3.5 2.61929 4.61929 1.5 6 1.5C7.38071 1.5 8.5 2.61929 8.5 4V5M3.5 5H2.5V9.5H9.5V5H8.5M3.5 5H8.5V7.5H3.5V5Z" fill="currentColor"/></svg>`
+            : `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 5V4C3.5 2.61929 4.61929 1.5 6 1.5C7.38071 1.5 8.5 2.61929 8.5 4V5M3.5 5H2.5V9.5H9.5V5H8.5M3.5 5H8.5V7.5H3.5V5Z" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        
+        lockBtn.onclick = (e) => {
+            e.stopPropagation();
+            item.node.locked = !item.node.locked;
+            this.renderVisibleItems();
+        };
+        actionsContainer.appendChild(lockBtn);
+
+        // Visibility Toggle (Figma eye icon)
+        const visibilityBtn = document.createElement('div');
+        const isVisible = item.node.visible;
+        Object.assign(visibilityBtn.style, {
+            width: '20px',
+            height: '20px',
+            display: !isVisible ? 'flex' : 'none',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: !isVisible ? 'var(--figma-text-primary)' : 'var(--figma-text-tertiary)',
+            cursor: 'pointer',
+            borderRadius: '2px'
+        });
+        visibilityBtn.innerHTML = !isVisible
+            ? `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 2L2 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M1.5 6C1.5 6 3.5 2.5 6 2.5C8.5 2.5 10.5 6 10.5 6C10.5 6 8.5 9.5 6 9.5C3.5 9.5 1.5 6 1.5 6Z" stroke="currentColor" stroke-width="1" stroke-opacity="0.3"/><circle cx="6" cy="6" r="1.5" stroke="currentColor" stroke-width="1" stroke-opacity="0.3"/></svg>`
+            : `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 6C1.5 6 3.5 2.5 6 2.5C8.5 2.5 10.5 6 10.5 6C10.5 6 8.5 9.5 6 9.5C3.5 9.5 1.5 6 1.5 6Z" stroke="currentColor" stroke-width="1"/><circle cx="6" cy="6" r="1.5" stroke="currentColor" stroke-width="1"/></svg>`;
+        
+        visibilityBtn.onclick = (e) => {
+            e.stopPropagation();
+            item.node.visible = !item.node.visible;
+            this.renderVisibleItems();
+        };
+        actionsContainer.appendChild(visibilityBtn);
+
+        div.onmouseenter = () => {
+            const isSelected = this.auxLayer.selectedNodes.has(item.node);
+            if (!isSelected) {
+                div.style.backgroundColor = 'var(--figma-hover-bg)';
+            }
+            lockBtn.style.display = 'flex';
+            visibilityBtn.style.display = 'flex';
+        };
+        div.onmouseleave = () => {
+            const isSelected = this.auxLayer.selectedNodes.has(item.node);
+            if (!isSelected) {
+                div.style.backgroundColor = 'transparent';
+            }
+            if (!item.node.locked) lockBtn.style.display = 'none';
+            if (item.node.visible) visibilityBtn.style.display = 'none';
+        };
 
         // Selection Click
         div.onclick = (e) => {
             e.stopPropagation();
-            this.auxLayer.selectedNode = item.node;
+            if (e.shiftKey) {
+                // Multi-select logic if needed, but for now just single select
+                this.auxLayer.selectedNode = item.node;
+            } else {
+                this.auxLayer.selectedNode = item.node;
+            }
             this.rootNode.invalidate();
             
-            // 触发交互管理器的选中变化回调，确保其他组件同步
             if (this.interaction.onSelectionChange) {
                 this.interaction.onSelectionChange();
-            } else {
-                this.updateHighlight();
             }
             
             this.interaction.focusNode(item.node);
-        };
-
-        // Hover
-        div.onmouseover = () => {
-            this.auxLayer.hoveredNode = item.node;
-            this.rootNode.invalidate();
-            this.updateHighlight();
-        };
-        div.onmouseout = () => {
-            if (this.auxLayer.hoveredNode === item.node) {
-                this.auxLayer.hoveredNode = null;
-                this.rootNode.invalidate();
-                this.updateHighlight();
-            }
         };
 
         return div;
@@ -326,14 +429,20 @@ export class OutlineView {
         const isHovered = this.auxLayer.hoveredNode === node;
 
         if (isSelected) {
-            el.style.backgroundColor = '#0055aa';
+            el.style.backgroundColor = 'var(--figma-blue)';
             el.style.color = '#ffffff';
-        } else if (isHovered) {
-            el.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
-            el.style.color = '#ffffff';
+            const svgs = el.querySelectorAll('svg');
+            svgs.forEach(svg => (svg as unknown as HTMLElement).style.color = '#ffffff');
+        } else if (isHovered) { 
+            el.style.backgroundColor = 'var(--figma-hover-bg)';
+            el.style.color = 'var(--figma-text-primary)';
+            const svgs = el.querySelectorAll('svg');
+            svgs.forEach(svg => (svg as unknown as HTMLElement).style.color = 'var(--figma-text-secondary)');
         } else {
             el.style.backgroundColor = 'transparent';
-            el.style.color = '#cccccc';
+            el.style.color = 'var(--figma-text-secondary)';
+            const svgs = el.querySelectorAll('svg');
+            svgs.forEach(svg => (svg as unknown as HTMLElement).style.color = 'var(--figma-text-tertiary)');
         }
     }
 

@@ -34,6 +34,16 @@ export type StrokeType = 'inner' | 'center' | 'outer';
 export type StrokeStyle = 'solid' | 'dashed';
 
 /**
+ * 约束配置 (Constraints)
+ * 
+ * 决定当父节点尺寸改变时，子节点如何调整自己的位置或大小。
+ */
+export interface Constraints {
+    horizontal: 'min' | 'max' | 'center' | 'scale' | 'both'; // min=left/top, max=right/bottom
+    vertical: 'min' | 'max' | 'center' | 'scale' | 'both';
+}
+
+/**
  * 节点基础样式配置 (针对矩形元素)
  */
 export interface NodeStyle {
@@ -53,4 +63,6 @@ export interface NodeStyle {
     strokeDashArray?: [number, number];
     /** 是否裁剪子节点 (溢出隐藏) */
     clipChildren?: boolean;
+    /** 约束配置 */
+    constraints?: Constraints;
 }

@@ -37,7 +37,9 @@ export class Node {
     public get width(): number { return this._width; }
     public set width(value: number) {
         if (this._width !== value) {
+            const oldWidth = this._width;
             this._width = value;
+            this.onResize(oldWidth, this._height, value, this._height);
             this.markTransformDirty();
             this.syncSpatialIndex();
             this.invalidate();
@@ -49,10 +51,64 @@ export class Node {
     public get height(): number { return this._height; }
     public set height(value: number) {
         if (this._height !== value) {
+            const oldHeight = this._height;
             this._height = value;
+            this.onResize(this._width, oldHeight, this._width, value);
             this.markTransformDirty();
             this.syncSpatialIndex();
             this.invalidate();
+        }
+    }
+
+    private onResize(oldW: number, oldH: number, newW: number, newH: number) {
+        if (!this._children || this._children.length === 0) return;
+        if (oldW === 0 || oldH === 0) return; // Prevent division by zero
+
+        for (const child of this._children) {
+            const constraints = child.style.constraints;
+            if (!constraints) continue;
+
+            // Horizontal
+            if (newW !== oldW) {
+                switch (constraints.horizontal) {
+                    case 'max': // Right
+                        child.setPosition(child.x + (newW - oldW), child.y);
+                        break;
+                    case 'center':
+                        child.setPosition(child.x + (newW - oldW) / 2, child.y);
+                        break;
+                    case 'scale':
+                        const ratioX = newW / oldW;
+                        child.setTransform(child.x * ratioX, child.y, child.scaleX, child.scaleY);
+                        child.width *= ratioX;
+                        break;
+                    case 'both':
+                        const rightDist = oldW - (child.x + child.width);
+                        child.width = newW - child.x - rightDist;
+                        break;
+                }
+            }
+
+            // Vertical
+            if (newH !== oldH) {
+                switch (constraints.vertical) {
+                    case 'max': // Bottom
+                        child.setPosition(child.x, child.y + (newH - oldH));
+                        break;
+                    case 'center':
+                        child.setPosition(child.x, child.y + (newH - oldH) / 2);
+                        break;
+                    case 'scale':
+                        const ratioY = newH / oldH;
+                        child.setTransform(child.x, child.y * ratioY, child.scaleX, child.scaleY);
+                        child.height *= ratioY;
+                        break;
+                    case 'both':
+                        const bottomDist = oldH - (child.y + child.height);
+                        child.height = newH - child.y - bottomDist;
+                        break;
+                }
+            }
         }
     }
 
@@ -65,11 +121,13 @@ export class Node {
     public childSpatialIndex: MatrixSpatialIndex | null = null;
 
     /** 状态位掩码 */
-    private _flags: number = 16; // 默认 BIT_SPATIAL_DIRTY(16) 为 1
+    private _flags: number = 16 | 32; // 默认 BIT_SPATIAL_DIRTY(16) | BIT_VISIBLE(32) 为 1
     private static readonly BIT_INTERACTIVE = 1;
     private static readonly BIT_HOVERED = 2;
     private static readonly BIT_SELECTED = 4;
+    private static readonly BIT_LOCKED = 8;
     private static readonly BIT_SPATIAL_DIRTY = 16;
+    private static readonly BIT_VISIBLE = 32;
 
     public get interactive(): boolean { return (this._flags & Node.BIT_INTERACTIVE) !== 0; }
     public set interactive(v: boolean) { if (v) this._flags |= Node.BIT_INTERACTIVE; else this._flags &= ~Node.BIT_INTERACTIVE; }
@@ -79,6 +137,19 @@ export class Node {
 
     public get isSelected(): boolean { return (this._flags & Node.BIT_SELECTED) !== 0; }
     public set isSelected(v: boolean) { if (v) this._flags |= Node.BIT_SELECTED; else this._flags &= ~Node.BIT_SELECTED; }
+
+    public get locked(): boolean { return (this._flags & Node.BIT_LOCKED) !== 0; }
+    public set locked(v: boolean) { 
+        if (v) this._flags |= Node.BIT_LOCKED; 
+        else this._flags &= ~Node.BIT_LOCKED; 
+    }
+
+    public get visible(): boolean { return (this._flags & Node.BIT_VISIBLE) !== 0; }
+    public set visible(v: boolean) { 
+        if (v) this._flags |= Node.BIT_VISIBLE; 
+        else this._flags &= ~Node.BIT_VISIBLE; 
+        this.invalidate();
+    }
 
     /** 空间数据是否过期 */
     public get spatialDirty(): boolean { return (this._flags & Node.BIT_SPATIAL_DIRTY) !== 0; }
@@ -224,7 +295,22 @@ export class Node {
         trans.setPosition(x, y);
         this.markTransformDirty();
         this.syncSpatialIndex();
-        // this.invalidate();
+        this.invalidate();
+    }
+
+    /**
+     * 设置缩放
+     */
+    public setScale(x: number, y: number) {
+        const trans = this.transform;
+        if (trans.scaleX === x && trans.scaleY === y) {
+            return;
+        }
+
+        trans.setScale(x, y);
+        this.markTransformDirty();
+        this.syncSpatialIndex();
+        this.invalidate();
     }
 
     /**
