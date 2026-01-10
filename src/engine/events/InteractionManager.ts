@@ -27,10 +27,17 @@ export class InteractionManager {
     public onSelectionChange: (() => void) | null = null;
     // 回调函数：当悬停状态发生变化时触发
     public onHoverChange: (() => void) | null = null;
+    // 回调函数：当节点变换发生变化时触发 (如拖拽、缩放)
+    public onTransformChange: (() => void) | null = null;
+    // 回调函数：用于创建新节点
+    public onCreateNode: ((type: 'frame' | 'image', x: number, y: number, w: number, h: number, parent: Node) => Node) | null = null;
 
     // 状态标记
     private isPanning: boolean = false;
     private isBoxSelecting: boolean = false;
+    private isCreating: boolean = false;
+    private isFixedSizeCreation: boolean = false; // 是否为固定大小创建模式 (工具栏拖拽)
+    private creationNode: Node | null = null;
 
     // 性能优化：预分配对象以减少 GC
     private _tempVec2a = vec2.create();
@@ -47,9 +54,11 @@ export class InteractionManager {
     private lastMousePos: vec2 = vec2.create();
     // 拖拽/缩放开始时的状态记录
     private dragStartMousePos: vec2 = vec2.create();
-    private dragStartNodesState: Map<Node, { x: number, y: number, w: number, h: number }> = new Map();
+    private dragStartNodesState: Map<Node, { x: number, y: number, w: number, h: number, rotation: number }> = new Map();
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
+    // 旋转中心点 (世界空间)
+    private rotationPivot: vec2 = vec2.create();
 
     // 绑定后的事件处理器，用于注销
     private _handlers: Record<string, (e: any) => void> = {};
@@ -254,6 +263,11 @@ export class InteractionManager {
             case 'se': return 'nwse-resize';
             case 'ne':
             case 'sw': return 'nesw-resize';
+            case 'r':
+            case 'rnw':
+            case 'rne':
+            case 'rse':
+            case 'rsw': return 'crosshair'; // Or 'rotate' if available in CSS
             default: return 'default';
         }
     }
@@ -370,6 +384,131 @@ export class InteractionManager {
     }
 
     /**
+     * 开始拖拽创建 (用于从工具栏直接拖拽)
+     */
+    public startDragCreation(type: 'frame' | 'image', screenPos: vec2) {
+        // 先转换为画布局部坐标
+        const canvasPos = this.getMousePos({ clientX: screenPos[0], clientY: screenPos[1] } as MouseEvent, this._tempVec2a);
+        const worldPos = this.getWorldMousePos(canvasPos, this._tempVec2b);
+        
+        vec2.copy(this.dragStartMousePos, worldPos);
+        vec2.copy(this.lastMousePos, canvasPos);
+        
+        if (this.onCreateNode) {
+            this.isCreating = true;
+            this.isFixedSizeCreation = true; // 工具栏拖拽，开启固定大小模式
+            
+            // 查找当前鼠标下的 Container 节点作为父节点
+            let hitParent: Node = this.scene;
+            const hit = this.hitTest(this.scene, worldPos);
+            if (hit) {
+                // 向上查找最近的 Container
+                let curr: Node | null = hit;
+                while (curr && curr !== this.scene) {
+                    if (curr.constructor.name === 'Container') {
+                        hitParent = curr;
+                        break;
+                    }
+                    curr = curr.parent;
+                }
+            }
+
+            // 拖拽创建时，默认大小 100x100，中心跟随鼠标
+            this.creationNode = this.onCreateNode(type, worldPos[0] - 50, worldPos[1] - 50, 100, 100, hitParent);
+            this.renderer.ctx.canvas.style.cursor = 'crosshair';
+            this.scene.invalidate();
+        }
+    }
+
+    /**
+     * 更新拖拽创建的位置 (用于 HTML5 drag 事件)
+     */
+    public updateDragCreation(screenPos: vec2) {
+        if (!this.isCreating || !this.creationNode) return;
+        const canvasPos = this.getMousePos({ clientX: screenPos[0], clientY: screenPos[1] } as MouseEvent, this._tempVec2a);
+        const worldPos = this.getWorldMousePos(canvasPos, this._tempVec2b);
+        
+        this.handleCreationMove(worldPos);
+        this.scene.invalidate();
+    }
+
+    private handleCreationMove(worldPos: vec2) {
+        if (!this.creationNode) return;
+        this.renderer.ctx.canvas.style.cursor = 'crosshair';
+        
+        // 1. 查找潜在的父容器 (Hover 效果支持)
+        const originalInteractive = this.creationNode.interactive;
+        this.creationNode.interactive = false; // 暂时禁用自身交互以检测下方容器
+        const hit = this.hitTest(this.scene, worldPos);
+        this.creationNode.interactive = originalInteractive;
+
+        // 过滤出容器类型的节点作为目标
+        let target: Node | null = hit;
+        while (target && target.constructor.name !== 'Container' && target !== this.scene) {
+            target = target.parent;
+        }
+        const finalTarget = target || this.scene;
+        this.auxLayer.dragTargetNode = finalTarget;
+
+        // 2. 如果目标容器发生了变化，进行重挂载 (Reparenting)
+        if (this.creationNode.parent !== finalTarget) {
+            const currentWorldPos = this._tempVec2a;
+            const wm = this.creationNode.getWorldMatrix();
+            vec2.set(currentWorldPos, wm[6], wm[7]);
+
+            finalTarget.addChild(this.creationNode);
+
+            const inv = mat3.invert(this._tempMat3a, finalTarget.getWorldMatrix());
+            if (inv) {
+                const localPos = vec2.transformMat3(vec2.create(), currentWorldPos, inv);
+                this.creationNode.setPosition(localPos[0], localPos[1]);
+            }
+            if (this.onStructureChange) this.onStructureChange();
+        }
+
+        const parent = finalTarget;
+        let start = this.dragStartMousePos;
+        let end = worldPos;
+
+        // 如果是在嵌套容器中创建，需要将世界坐标转换为局部坐标
+        if (parent !== this.scene) {
+            const inv = mat3.invert(this._tempMat3a, parent.getWorldMatrix());
+            if (inv) {
+                const localStart = vec2.transformMat3(vec2.create(), start, inv);
+                const localEnd = vec2.transformMat3(vec2.create(), end, inv);
+                start = localStart;
+                end = localEnd;
+            }
+        }
+
+        if (!this.isFixedSizeCreation && this.engine.activeTool) {
+            // 点击画布后拖拽创建：调整大小
+            const x = Math.min(start[0], end[0]);
+            const y = Math.min(start[1], end[1]);
+            const w = Math.abs(end[0] - start[0]);
+            const h = Math.abs(end[1] - start[1]);
+            this.creationNode.set(x, y, w, h);
+        } else {
+            // 从工具栏直接拖拽创建：跟随鼠标中心
+            this.creationNode.setPosition(end[0] - 50, end[1] - 50);
+        }
+    }
+
+    /**
+     * 结束拖拽创建 (用于 HTML5 dragend 事件)
+     */
+    public endDragCreation(screenPos: vec2) {
+        if (!this.isCreating) return;
+        
+        // 确保位置更新到最后
+        this.updateDragCreation(screenPos);
+        
+        // 复用已有的 onMouseUp 逻辑来完成清理
+        const dummyEvent = { clientX: screenPos[0], clientY: screenPos[1] } as MouseEvent;
+        this.onMouseUp(dummyEvent);
+    }
+
+    /**
      * 鼠标按下事件处理
      */
     private onMouseDown(e: MouseEvent) {
@@ -380,12 +519,45 @@ export class InteractionManager {
         vec2.copy(this.dragStartMousePos, worldPos);
         this.dragStartNodesState.clear();
 
+        // 0. Check if a tool is active for creation
+        if (this.engine.activeTool && this.onCreateNode) {
+            this.isCreating = true;
+            this.isFixedSizeCreation = false; // 画布点击拖拽，关闭固定大小模式（允许调整大小）
+            // 查找当前鼠标下的 Container 节点作为父节点
+            let hitParent: Node = this.scene;
+            const hit = this.hitTest(this.scene, worldPos);
+            if (hit) {
+                // 向上查找最近的 Container
+                let curr: Node | null = hit;
+                while (curr && curr !== this.scene) {
+                    if (curr.constructor.name === 'Container') {
+                        hitParent = curr;
+                        break;
+                    }
+                    curr = curr.parent;
+                }
+            }
+            // 初始创建一个 0x0 的节点，随后在 mousemove 中调整大小
+            this.creationNode = this.onCreateNode(this.engine.activeTool, worldPos[0], worldPos[1], 0, 0, hitParent);
+            this.scene.invalidate();
+            return;
+        }
+
         // 1. Check handles first
         const handleHit = this.hitTestHandles(pos);
         if (handleHit) {
             const node = handleHit.node;
             this.auxLayer.activeHandle = handleHit.handle.type;
-            this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height });
+            this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
+
+            // 如果是旋转手柄，计算并记录中心点作为旋转中心
+            const type = handleHit.handle.type;
+            if (type === 'r' || type === 'rnw' || type === 'rne' || type === 'rse' || type === 'rsw') {
+                const worldMatrix = node.getWorldMatrix();
+                const localCenter = vec2.fromValues(node.width / 2, node.height / 2);
+                vec2.transformMat3(this.rotationPivot, localCenter, worldMatrix);
+            }
+
             this.scene.invalidate();
             return;
         }
@@ -408,7 +580,7 @@ export class InteractionManager {
 
                 // 记录所有选中节点的起始状态
                 this.auxLayer.selectedNodes.forEach(node => {
-                    this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height });
+                    this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
                 });
             } else {
                 this.auxLayer.selectedNodes.clear();
@@ -416,7 +588,7 @@ export class InteractionManager {
                 this.auxLayer.draggingNode = hit;
                 vec2.copy(this.auxLayer.dragProxyPos, worldPos);
 
-                this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height });
+                this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
                 if (this.onSelectionChange) this.onSelectionChange();
             }
         } else {
@@ -476,7 +648,15 @@ export class InteractionManager {
         const deltaY = pos[1] - this.lastMousePos[1];
         let needsRender = false;
 
-        if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1 && !this.isBoxSelecting) {
+        if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1 && !this.isBoxSelecting && !this.isCreating) {
+            return;
+        }
+
+        // Handle Creation
+        if (this.isCreating && this.creationNode) {
+            this.handleCreationMove(worldPos);
+            this.scene.invalidate();
+            this.lastMousePos = pos;
             return;
         }
 
@@ -501,6 +681,63 @@ export class InteractionManager {
 
             const startState = this.dragStartNodesState.get(node);
             if (!startState) return;
+
+            if (handleType === 'r' || handleType === 'rnw' || handleType === 'rne' || handleType === 'rse' || handleType === 'rsw') {
+                // Rotation logic (Around Center Pivot)
+                
+                // 1. Calculate current angle from pivot to current mouse position
+                const currentAngle = Math.atan2(worldPos[1] - this.rotationPivot[1], worldPos[0] - this.rotationPivot[0]);
+                
+                // 2. Calculate initial angle from pivot to drag start mouse position
+                const startAngle = Math.atan2(this.dragStartMousePos[1] - this.rotationPivot[1], this.dragStartMousePos[0] - this.rotationPivot[0]);
+
+                // 3. Update rotation
+                let rotation = startState.rotation + (currentAngle - startAngle);
+                
+                // Snap to 15 degree increments if Shift is held
+                if (e.shiftKey) {
+                    const snap = Math.PI / 12; // 15 degrees
+                    rotation = Math.round(rotation / snap) * snap;
+                }
+                
+                node.rotation = rotation;
+
+                // 4. Adjust position to keep the center pivot stationary in world space
+                const parent = node.parent;
+                if (parent) {
+                    // Get pivot position in parent's local space
+                    const parentWorldMatrixInv = this._tempMat3a;
+                    if (mat3.invert(parentWorldMatrixInv, parent.getWorldMatrix())) {
+                        const pivotInParentLocal = this._tempVec2a;
+                        vec2.transformMat3(pivotInParentLocal, this.rotationPivot, parentWorldMatrixInv);
+
+                        // Calculate new local (0,0) position
+                        // LocalPos = PivotInParentLocal - RotationMatrix * ScaleMatrix * LocalCenter
+                        const localCenter = this._tempVec2b;
+                        vec2.set(localCenter, node.width / 2, node.height / 2);
+
+                        // Rotation * Scale * LocalCenter
+                        const rotatedCenter = this._tempVec2b; // Reuse tempVec2b for result
+                        const cos = Math.cos(rotation);
+                        const sin = Math.sin(rotation);
+                        const rcX = (cos * node.scaleX * localCenter[0]) + (-sin * node.scaleY * localCenter[1]);
+                        const rcY = (sin * node.scaleX * localCenter[0]) + (cos * node.scaleY * localCenter[1]);
+                        rotatedCenter[0] = rcX;
+                        rotatedCenter[1] = rcY;
+
+                        node.setTransform(
+                            pivotInParentLocal[0] - rotatedCenter[0],
+                            pivotInParentLocal[1] - rotatedCenter[1],
+                            node.scaleX,
+                            node.scaleY
+                        );
+                    }
+                }
+                
+                this.lastMousePos = pos;
+                this.scene.invalidate();
+                return;
+            }
 
             // Calculate total world delta since mouse down
             const totalWorldDeltaX = worldPos[0] - this.dragStartMousePos[0];
@@ -627,10 +864,17 @@ export class InteractionManager {
             this.lastMousePos = pos;
             this.scene.invalidate();
 
+            if (this.onTransformChange) this.onTransformChange();
             return;
         }
 
         if (!this.auxLayer.draggingNode && !this.isPanning && !this.isBoxSelecting) {
+            // 如果有激活的工具，强制显示加号光标
+            if (this.engine.activeTool) {
+                this.renderer.ctx.canvas.style.cursor = 'crosshair';
+                return;
+            }
+
             // Check handle hover
             const handleHit = this.hitTestHandles(pos);
             if (handleHit) {
@@ -666,6 +910,7 @@ export class InteractionManager {
         }
 
         if (this.auxLayer.draggingNode) {
+            this.renderer.ctx.canvas.style.cursor = 'grabbing';
             const draggingNode = this.auxLayer.draggingNode;
             const topLevelNodes = this.getTopLevelSelectedNodes();
 
@@ -705,6 +950,7 @@ export class InteractionManager {
                     }
 
                     node.setPosition(newX, newY);
+                    if (this.onTransformChange) this.onTransformChange();
 
                 }
             }
@@ -801,8 +1047,31 @@ export class InteractionManager {
         }
     }
 
-    private onMouseUp(e: MouseEvent) {
+    private onMouseUp(_e: MouseEvent) {
         let needsRender = false;
+
+        // 处理创建模式的结束
+        if (this.isCreating) {
+            this.isCreating = false;
+            this.isFixedSizeCreation = false; // 重置模式
+            if (this.creationNode) {
+                // 如果是画布点击创建模式（有激活工具）且最终尺寸过小，则应用 100x100 的默认尺寸
+                if (this.engine.activeTool && this.creationNode.width < 5 && this.creationNode.height < 5) {
+                    // 使用节点当前的局部坐标进行偏移，确保在嵌套情况下位置依然正确
+                    this.creationNode.set(this.creationNode.x - 50, this.creationNode.y - 50, 100, 100);
+                }
+
+                // 创建完成后，默认选中新节点
+                this.auxLayer.selectedNodes.clear();
+                this.auxLayer.selectedNodes.add(this.creationNode);
+                this.creationNode = null;
+                if (this.onSelectionChange) this.onSelectionChange();
+            }
+            this.engine.activeTool = null; // 重置激活的工具
+            this.auxLayer.dragTargetNode = null; // 清除容器高亮
+            this.renderer.ctx.canvas.style.cursor = 'default';
+            needsRender = true;
+        }
 
         if (this.auxLayer.activeHandle) {
             this.auxLayer.activeHandle = null;

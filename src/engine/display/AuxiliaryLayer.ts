@@ -3,7 +3,7 @@ import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from '../core/Rect';
 import type { IRenderer } from '../core/IRenderer';
 
-export type HandleType = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+export type HandleType = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se' | 'r' | 'rnw' | 'rne' | 'rse' | 'rsw';
 
 export interface Handle {
     type: HandleType;
@@ -245,6 +245,11 @@ export class AuxiliaryLayer {
             { type: 's', lx: w / 2, ly: h },
             { type: 'sw', lx: 0, ly: h },
             { type: 'w', lx: 0, ly: h / 2 },
+            { type: 'r', lx: w / 2, ly: -20 }, // Rotation handle 20px above top-center
+            { type: 'rnw', lx: -15, ly: -15 }, // Corner rotation handles
+            { type: 'rne', lx: w + 15, ly: -15 },
+            { type: 'rse', lx: w + 15, ly: h + 15 },
+            { type: 'rsw', lx: -15, ly: h + 15 },
         ];
 
         const localPos = this._tempVec2b;
@@ -276,10 +281,36 @@ export class AuxiliaryLayer {
                 continue;
             }
 
-            ctx.beginPath();
-            ctx.rect(handle.x - size / 2, handle.y - size / 2, size, size);
-            ctx.fill();
-            ctx.stroke();
+            if (handle.type === 'r' || handle.type === 'rnw' || handle.type === 'rne' || handle.type === 'rse' || handle.type === 'rsw') {
+                // Draw a line from the corresponding anchor point to the rotation handle
+                let anchorType: HandleType | null = null;
+                if (handle.type === 'r') anchorType = 'n';
+                else if (handle.type === 'rnw') anchorType = 'nw';
+                else if (handle.type === 'rne') anchorType = 'ne';
+                else if (handle.type === 'rse') anchorType = 'se';
+                else if (handle.type === 'rsw') anchorType = 'sw';
+
+                if (anchorType) {
+                    const anchorHandle = handles.find(h => h.type === anchorType);
+                    if (anchorHandle) {
+                        ctx.beginPath();
+                        ctx.moveTo(anchorHandle.x, anchorHandle.y);
+                        ctx.lineTo(handle.x, handle.y);
+                        ctx.stroke();
+                    }
+                }
+
+                // Draw rotation handle as a circle
+                ctx.beginPath();
+                ctx.arc(handle.x, handle.y, size / 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.rect(handle.x - size / 2, handle.y - size / 2, size, size);
+                ctx.fill();
+                ctx.stroke();
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import type { IRenderer } from './IRenderer';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 import { MatrixSpatialIndex } from './MatrixSpatialIndex';
 import type { Engine } from '../Engine';
+import { rectVertexShader, rectFragmentShader } from './shaders';
 
 /**
  * 核心渲染器类
@@ -18,6 +19,12 @@ export class Renderer implements IRenderer {
 
     private shaderProgram: WebGLProgram | null = null;
     private uniformLocations: Map<string, WebGLUniformLocation | null> = new Map();
+    
+    // 矩形特效着色器
+    private rectProgram: WebGLProgram | null = null;
+    private rectUniformLocations: Map<string, WebGLUniformLocation | null> = new Map();
+    private rectVertexBuffer: WebGLBuffer | null = null;
+
     private lastUsedProgram: WebGLProgram | null = null;
     private lastBoundTexture: (WebGLTexture | null)[] = [];
 
@@ -84,6 +91,11 @@ export class Renderer implements IRenderer {
     private _dirtyNodes: Node[] = []; // 用于 RBush 批量加载
     private _nodesByOrder: Node[] = []; // 用于超大规模场景的快速排序渲染
     private _visibleBitset: Uint8Array = new Uint8Array(0); // 用于大规模场景的快速排序
+    
+    // 裁剪栈
+    private _clipStack: Node[] = [];
+    private _currentStencilLevel: number = 0;
+
     /** 当前帧全局时间戳 (ms) */
     public static currentTime: number = 0;
     public engine: Engine;
@@ -109,15 +121,17 @@ export class Renderer implements IRenderer {
         canvasGL.style.position = 'absolute';
         canvasGL.style.top = '0';
         canvasGL.style.left = '0';
+        canvasGL.style.width = '100%';
+        canvasGL.style.height = '100%';
         container.appendChild(canvasGL);
         // 开启 preserveDrawingBuffer 以支持局部重绘 (Dirty Rect Rendering)
         // 升级到 WebGL 2
-        this.gl = canvasGL.getContext('webgl2', { preserveDrawingBuffer: true })!;
+        this.gl = canvasGL.getContext('webgl2', { preserveDrawingBuffer: true, stencil: true })!;
         if (!this.gl) {
             console.error("WebGL 2 not supported, falling back to WebGL 1");
             // If we really wanted to fallback, we'd need to change the type of this.gl to WebGLRenderingContext | WebGL2RenderingContext
             // But for this task we assume WebGL 2 is desired.
-            this.gl = (canvasGL.getContext('webgl', { preserveDrawingBuffer: true }) as any) as WebGL2RenderingContext;
+            this.gl = (canvasGL.getContext('webgl', { preserveDrawingBuffer: true, stencil: true }) as any) as WebGL2RenderingContext;
         }
 
         // 创建 2D Canvas (用于辅助绘制，如文本、调试框)
@@ -125,6 +139,8 @@ export class Renderer implements IRenderer {
         canvas2D.style.position = 'absolute';
         canvas2D.style.top = '0';
         canvas2D.style.left = '0';
+        canvas2D.style.width = '100%';
+        canvas2D.style.height = '100%';
         // canvas2D.style.pointerEvents = 'none'; // 让事件穿透到 GL canvas (目前由 InteractionManager 统一接管事件，暂不需要)
         container.appendChild(canvas2D);
         this.ctx = canvas2D.getContext('2d')!;
@@ -193,14 +209,18 @@ export class Renderer implements IRenderer {
 
         // 1. 获取硬件支持的最大纹理单元数
         const maxUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
-        this.maxTextures = Math.min(maxUnits, 16); // 限制到 16，避免 shader 编译过慢或超出某些限制
-        console.log(`[Renderer] Max Texture Units: ${maxUnits}, Using: ${this.maxTextures}`);
+        // 预留一个位置给特效纹理 (如背景模糊)
+        this.maxTextures = Math.min(maxUnits - 1, 15); 
+        console.log(`[Renderer] Max Texture Units: ${maxUnits}, Batching: ${this.maxTextures}, Reserved: 1`);
 
         // 初始化纹理索引数组
         this.textureIndices = new Int32Array(this.maxTextures);
         for (let i = 0; i < this.maxTextures; i++) {
             this.textureIndices[i] = i;
         }
+        
+        // 重新初始化纹理绑定缓存，确保包含预留单元
+        this.lastBoundTexture = new Array(maxUnits).fill(null);
         MemoryTracker.getInstance().track(
             MemoryCategory.CPU_TYPED_ARRAY,
             'Renderer_textureIndices',
@@ -277,7 +297,34 @@ void main() {
 
         // 设置顶点属性布局
         this.bindAttributes();
+
+        // 4. 初始化矩形特效着色器
+        const rectVs = this.createShader(gl, gl.VERTEX_SHADER, rectVertexShader);
+        const rectFs = this.createShader(gl, gl.FRAGMENT_SHADER, rectFragmentShader);
+        this.rectProgram = this.createProgram(gl, rectVs, rectFs);
+
+        // 创建矩形专用顶点缓冲区 (TL, TR, BR, BL)
+        // 每个顶点: x, y (position), u, v (localCoord)
+        const rectVertices = new Float32Array([
+            0, 0, 0, 0,
+            1, 0, 1, 0,
+            1, 1, 1, 1,
+            0, 1, 0, 1
+        ]);
+        this.rectVertexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.rectVertexBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, rectVertices, gl.STATIC_DRAW);
+
+        // 创建背景模糊用的纹理
+        this.backgroundTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.backgroundTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     }
+
+    private backgroundTexture: WebGLTexture | null = null;
 
     private generateFragmentShader(maxTextures: number): string {
         let ifElseBlock = '';
@@ -369,6 +416,184 @@ void main() {
         return loc;
     }
 
+    private getRectUniformLocation(name: string): WebGLUniformLocation | null {
+        if (!this.rectProgram) return null;
+        if (this.rectUniformLocations.has(name)) {
+            return this.rectUniformLocations.get(name)!;
+        }
+        const loc = this.gl.getUniformLocation(this.rectProgram, name);
+        this.rectUniformLocations.set(name, loc);
+        return loc;
+    }
+
+    /**
+     * 绘制带有特殊效果的矩形
+     * 使用 SDF 着色器渲染，支持圆角、阴影、背景模糊
+     */
+    public drawRectWithEffects(node: Node, isMask: boolean = false) {
+        // 1. 提交之前的批次
+        this.flush();
+
+        const gl = this.gl;
+        const program = this.rectProgram!;
+        gl.useProgram(program);
+        this.lastUsedProgram = program;
+
+        // 2. 处理背景模糊 (如果需要)
+        const hasBgBlur = !isMask && (node.effects.backgroundBlur || 0) > 0;
+        const effectTexUnit = this.maxTextures; // 使用预留的最后一个纹理单元
+        
+        if (hasBgBlur && this.backgroundTexture) {
+            // 关键修复：在绑定和操作背景纹理前，必须先激活对应的纹理单元
+            // 否则会污染当前激活的单元 (通常是 TEXTURE0)
+            gl.activeTexture(gl.TEXTURE0 + effectTexUnit);
+            gl.bindTexture(gl.TEXTURE_2D, this.backgroundTexture);
+            
+            // 将当前 Backbuffer 复制到纹理
+            gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, this.width, this.height, 0);
+            
+            const uBgTex = this.getRectUniformLocation("u_backgroundTexture");
+            if (uBgTex) gl.uniform1i(uBgTex, effectTexUnit);
+        }
+
+        // 3. 设置 Uniforms
+        const setUniform2f = (name: string, x: number, y: number) => {
+            const loc = this.getRectUniformLocation(name);
+            if (loc) gl.uniform2f(loc, x, y);
+        };
+        const setUniform4f = (name: string, x: number, y: number, z: number, w: number) => {
+            const loc = this.getRectUniformLocation(name);
+            if (loc) gl.uniform4f(loc, x, y, z, w);
+        };
+        const setUniform1f = (name: string, x: number) => {
+            const loc = this.getRectUniformLocation(name);
+            if (loc) gl.uniform1f(loc, x);
+        };
+        const setUniform1i = (name: string, x: number) => {
+            const loc = this.getRectUniformLocation(name);
+            if (loc) gl.uniform1i(loc, x);
+        };
+
+        // 遮罩模式
+        setUniform1i("u_isMask", isMask ? 1 : 0);
+
+        // 基础属性
+        setUniform2f("u_size", node.width, node.height);
+
+        // 计算 padding，防止阴影或模糊被裁剪
+        let padding = 0;
+        if (!isMask) {
+            if (node.effects.outerShadow) {
+                const s = node.effects.outerShadow;
+                const blur = s.blur || 0;
+                const spread = s.spread || 0;
+                const offsetX = s.offsetX || 0;
+                const offsetY = s.offsetY || 0;
+                padding = Math.max(padding, blur + spread + Math.max(Math.abs(offsetX), Math.abs(offsetY)));
+            }
+            if (node.effects.backgroundBlur) {
+                padding = Math.max(padding, node.effects.backgroundBlur * 2.0);
+            }
+            if (node.effects.layerBlur) {
+                padding = Math.max(padding, node.effects.layerBlur * 2.0);
+            }
+            // 描边 padding
+            const strokeType = node.style.strokeType || 'inner';
+            const borderWidth = node.style.borderWidth || 0;
+            if (borderWidth > 0) {
+                if (strokeType === 'center') {
+                    padding = Math.max(padding, borderWidth * 0.5 + 1);
+                } else if (strokeType === 'outer') {
+                    padding = Math.max(padding, borderWidth + 1);
+                }
+            }
+        }
+        setUniform1f("u_padding", padding);
+
+        const bgColor = node.style.backgroundColor || (node as any).color || [0, 0, 0, 0];
+        setUniform4f("u_backgroundColor", bgColor[0], bgColor[1], bgColor[2], bgColor[3]);
+
+        // 圆角 (TL, TR, BR, BL)
+        const br = node.style.borderRadius || 0;
+        if (typeof br === 'number') {
+            setUniform4f("u_borderRadius", br, br, br, br);
+        } else {
+            // 确保按照 TL, TR, BR, BL 顺序传递
+            setUniform4f("u_borderRadius", br[0], br[1], br[2], br[3]);
+        }
+
+        const borderColor = node.style.borderColor || [0, 0, 0, 0];
+        setUniform4f("u_borderColor", borderColor[0], borderColor[1], borderColor[2], borderColor[3]);
+        setUniform1f("u_borderWidth", node.style.borderWidth || 0);
+        
+        const strokeTypeMap = { 'inner': 0, 'center': 1, 'outer': 2 };
+        setUniform1i("u_strokeType", strokeTypeMap[node.style.strokeType || 'inner']);
+
+        // 描边样式
+        const strokeStyleMap = { 'solid': 0, 'dashed': 1 };
+        setUniform1i("u_strokeStyle", strokeStyleMap[node.style.strokeStyle || 'solid']);
+        const dash = node.style.strokeDashArray || [10, 5];
+        setUniform2f("u_strokeDash", dash[0], dash[1]);
+
+        // 外阴影
+        const os = !isMask && node.effects.outerShadow;
+        if (os) {
+            setUniform4f("u_outerShadowColor", os.color[0], os.color[1], os.color[2], os.color[3]);
+            setUniform1f("u_outerShadowBlur", os.blur);
+            setUniform2f("u_outerShadowOffset", os.offsetX, os.offsetY);
+            setUniform1f("u_outerShadowSpread", os.spread || 0);
+        } else {
+            setUniform4f("u_outerShadowColor", 0, 0, 0, 0);
+        }
+
+        // 内阴影
+        const is = !isMask && node.effects.innerShadow;
+        if (is) {
+            setUniform4f("u_innerShadowColor", is.color[0], is.color[1], is.color[2], is.color[3]);
+            setUniform1f("u_innerShadowBlur", is.blur);
+            setUniform2f("u_innerShadowOffset", is.offsetX, is.offsetY);
+            setUniform1f("u_innerShadowSpread", is.spread || 0);
+        } else {
+            setUniform4f("u_innerShadowColor", 0, 0, 0, 0);
+        }
+
+        // 背景模糊
+        setUniform1i("u_hasBackgroundBlur", hasBgBlur ? 1 : 0);
+        setUniform1f("u_backgroundBlur", node.effects.backgroundBlur || 0);
+        setUniform1f("u_layerBlur", node.effects.layerBlur || 0);
+
+        // 矩阵
+        const uProj = this.getRectUniformLocation("u_projectionMatrix");
+        if (uProj) gl.uniformMatrix3fv(uProj, false, this.projectionMatrix);
+        const uView = this.getRectUniformLocation("u_viewMatrix");
+        if (uView) gl.uniformMatrix3fv(uView, false, this.viewMatrix);
+        const uWorld = this.getRectUniformLocation("u_worldMatrix");
+        if (uWorld) gl.uniformMatrix3fv(uWorld, false, node.getWorldMatrix());
+
+        // 4. 绑定顶点数据并绘制
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.rectVertexBuffer);
+        // a_position (location = 0)
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+        // a_localCoord (location = 1)
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+
+        // 绘制
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+        // 5. 恢复批处理着色器状态
+        gl.disableVertexAttribArray(1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.dynamicVertexBuffer);
+        this.bindAttributes();
+        
+        // 关键修复：重置激活的纹理单元到 TEXTURE0，并清理受污染的缓存
+        gl.activeTexture(gl.TEXTURE0);
+        this.lastBoundTexture[effectTexUnit] = null; 
+        
+        this.stats.drawCalls++;
+    }
+
     /**
      * 标记场景结构已改变，需要重新计算渲染顺序
      */
@@ -388,6 +613,69 @@ void main() {
             for (let i = 0; i < len; i++) {
                 this.updateRenderOrder(children[i]);
             }
+        }
+        
+        node.endOrder = this._nextRenderOrder - 1;
+    }
+
+    private applyClips(node: Node) {
+        // 1. 检查是否需要弹出旧的裁剪
+        while (this._clipStack.length > 0) {
+            const top = this._clipStack[this._clipStack.length - 1];
+            // 如果当前节点的顺序已经超出了栈顶节点的子树范围，弹出
+            if (node.renderOrder > top.endOrder) {
+                this.popClip();
+            } else {
+                break;
+            }
+        }
+
+        // 2. 检查当前节点是否开启了裁剪
+        if (node.style.clipChildren) {
+            this.pushClip(node);
+        }
+    }
+
+    private pushClip(node: Node) {
+        // 提交之前的绘制
+        this.flush();
+        const gl = this.gl;
+
+        if (this._currentStencilLevel === 0) {
+            gl.enable(gl.STENCIL_TEST);
+            gl.clearStencil(0);
+            gl.clear(gl.STENCIL_BUFFER_BIT);
+        }
+
+        this._currentStencilLevel++;
+
+        // 仅写入模板缓冲
+        gl.colorMask(false, false, false, false);
+        gl.stencilFunc(gl.ALWAYS, this._currentStencilLevel, 0xFF);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+
+        // 绘制裁剪形状
+        this.drawRectWithEffects(node, true);
+        this.flush();
+
+        // 恢复颜色写入，并设置后续绘制的模板测试
+        gl.colorMask(true, true, true, true);
+        gl.stencilFunc(gl.EQUAL, this._currentStencilLevel, 0xFF);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+
+        this._clipStack.push(node);
+    }
+
+    private popClip() {
+        this.flush();
+        const gl = this.gl;
+        this._clipStack.pop();
+        this._currentStencilLevel--;
+
+        if (this._currentStencilLevel === 0) {
+            gl.disable(gl.STENCIL_TEST);
+        } else {
+            gl.stencilFunc(gl.EQUAL, this._currentStencilLevel, 0xFF);
         }
     }
 
@@ -410,6 +698,11 @@ void main() {
         this._frameCount++;
         this.stats.drawCalls = 0;
         this.stats.quadCount = 0;
+
+        // 重置裁剪状态
+        this._clipStack.length = 0;
+        this._currentStencilLevel = 0;
+        this.gl.disable(this.gl.STENCIL_TEST);
 
         // 如果结构发生变化，重新计算全局渲染顺序
         if (this._structureDirty) {
@@ -473,9 +766,14 @@ void main() {
                 if (this._visibleBitset[i] === 1) {
                     const node = this._nodesByOrder[i];
                     if (node && 'renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                        this.applyClips(node);
                         (node as any).renderWebGL(this, dirtyRect);
                     }
                 }
+            }
+            // 清理剩余的裁剪
+            while (this._clipStack.length > 0) {
+                this.popClip();
             }
         } else {
             // 标准渲染路径：按照 renderOrder 排序后渲染
@@ -483,8 +781,13 @@ void main() {
             for (let i = 0; i < visibleCount; i++) {
                 const node = visibleNodes[i];
                 if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                    this.applyClips(node);
                     (node as any).renderWebGL(this, dirtyRect);
                 }
+            }
+            // 清理剩余的裁剪
+            while (this._clipStack.length > 0) {
+                this.popClip();
             }
         }
         this.stats.times.renderWebGL = performance.now() - r0;
@@ -669,6 +972,8 @@ void main() {
         // 重置批处理状态
         this.currentQuadCount = 0;
         this.textureSlots.length = 0; // 使用 length = 0 保持引用，减少分配
+        this.lastTexture = null;
+        this.lastTextureIndex = -1;
     }
 
     private lastTexture: WebGLTexture | null = null;

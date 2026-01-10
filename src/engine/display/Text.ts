@@ -135,6 +135,9 @@ export class Text extends Node {
     private static _sharedColor = new Float32Array([1, 1, 1, 1]);
 
     renderWebGL(renderer: IRenderer) {
+        // 调用基类渲染效果和背景
+        super.renderWebGL(renderer);
+
         this.updateTexture(renderer as Renderer);
 
         if (!this._texture || !this._texture.baseTexture) return; // 确保 texture 和 baseTexture 都存在

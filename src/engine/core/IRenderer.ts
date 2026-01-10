@@ -1,5 +1,6 @@
 import { mat3 } from 'gl-matrix';
 import type { Rect } from './Rect';
+import type { Node } from '../display/Node';
 
 export interface IRenderer {
     gl: WebGL2RenderingContext;
@@ -16,6 +17,9 @@ export interface IRenderer {
         uvs: Float32Array,
         color: Float32Array
     ): void;
+
+    /** 绘制带有特殊效果的矩形 */
+    drawRectWithEffects(node: Node): void;
     
     getProjectionMatrix(): mat3;
     getViewMatrix(): mat3;

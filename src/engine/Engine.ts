@@ -2,6 +2,7 @@ import { Renderer } from './core/Renderer';
 import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
+import { PropertyPanel } from './ui/PropertyPanel';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
@@ -24,8 +25,11 @@ export class Engine {
     public scene: Node;
     public interaction: InteractionManager;
     public outline: OutlineView;
+    public propertyPanel: PropertyPanel;
     public auxLayer: AuxiliaryLayer;
     public alwaysRender: boolean = false;
+    public activeTool: 'frame' | 'image' | null = null;
+    private container: HTMLElement;
 
     // 渲染请求 ID (防抖动)
     private _rafId: number | null = null;
@@ -44,6 +48,7 @@ export class Engine {
      * @param container 引擎挂载的 DOM 容器
      */
     constructor(container: HTMLElement) {
+        this.container = container;
         // 初始化渲染器
         this.renderer = new Renderer(container, this);
 
@@ -70,6 +75,12 @@ export class Engine {
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer, this.interaction);
 
+        // 初始化属性面板
+        this.propertyPanel = new PropertyPanel();
+        this.propertyPanel.onPropertyChange = () => {
+            this.requestRender();
+        };
+
         // 监听场景结构变化，更新大纲视图
         this.interaction.onStructureChange = () => {
             this.outline.update();
@@ -79,6 +90,28 @@ export class Engine {
         // 监听选中/悬停变化，更新大纲视图高亮
         this.interaction.onSelectionChange = () => {
             this.outline.updateHighlight();
+            this.propertyPanel.updateNode(this.auxLayer.selectedNode);
+            
+            // 更新容器布局：选中节点时显示属性栏，容器向左收缩
+            if (this.auxLayer.selectedNode) {
+                this.container.style.right = '240px';
+            } else {
+                this.container.style.right = '0';
+            }
+            // 触发布局变化后的 resize
+            const rect = this.container.getBoundingClientRect();
+            this.renderer.resize(rect.width, rect.height);
+            
+            this.requestRender();
+        };
+        this.interaction.onTransformChange = () => {
+            this.propertyPanel.updateNode(this.auxLayer.selectedNode);
+            // 变换时也确保布局正确
+            if (this.auxLayer.selectedNode) {
+                this.container.style.right = '240px';
+            }
+            const rect = this.container.getBoundingClientRect();
+            this.renderer.resize(rect.width, rect.height);
             this.requestRender();
         };
         this.interaction.onHoverChange = () => {
@@ -88,7 +121,8 @@ export class Engine {
 
         // 自动处理窗口大小调整
         this._resizeHandler = () => {
-            this.renderer.resize(container.clientWidth, container.clientHeight);
+            const rect = container.getBoundingClientRect();
+            this.renderer.resize(rect.width, rect.height);
             this.requestRender(); // 尺寸变化触发渲染
         };
         window.addEventListener('resize', this._resizeHandler);

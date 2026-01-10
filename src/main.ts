@@ -5,14 +5,20 @@ import { Sprite } from './engine/display/Sprite';
 import { Text } from './engine/display/Text';
 import { Container } from './engine/display/Container';
 import { MemoryTracker } from './engine/utils/MemoryProfiler';
+import { vec2, mat3 } from 'gl-matrix';
 
 const app = document.querySelector<HTMLDivElement>('#app')!
-app.style.width = '100vw';
-app.style.height = '100vh';
+app.style.position = 'absolute';
+app.style.left = '250px';
+app.style.right = '0';
+app.style.top = '0';
+app.style.bottom = '0';
 app.style.overflow = 'hidden';
 app.style.margin = '0';
 app.style.padding = '0';
 document.body.style.margin = '0';
+document.body.style.overflow = 'hidden';
+document.body.style.backgroundColor = '#1a1a1a';
 
 const engine = new Engine(app);
 
@@ -102,13 +108,31 @@ function loadBatch() {
         for (let j = 0; j < totalCols; j++) {
             const container = new Container(engine.renderer.gl);
             container.name = "MyContainer";
-            container.transform.setPosition(400 * i, 400 * j);
+            container.transform.setPosition(500 * i, 500 * j);
             container.interactive = true;
             // container.width = 400;
             // container.height = 400;
             container.set(container.x, container.y, 400, 400);
 
             container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
+
+
+            container.style = {
+            // backgroundColor: [1, 1, 1, 1],
+            borderRadius: [11,3,44,155],
+            borderColor: [0, 0, 0, 1],
+            borderWidth: 4
+             };
+             container.effects={
+                backgroundBlur:2,
+               outerShadow: {
+                color: [0.1, 0.3, 0.4, 0.5],
+                blur: 10,
+                offsetX: 5,
+                offsetY: 5,
+                spread: 2
+            }
+             }
             // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
             engine.scene.addChild(container, true);
 
@@ -165,6 +189,109 @@ function loadBatch() {
 
         // 更新大纲视图
         engine.outline.update();
+
+        // 5. 添加特效演示节点
+        const effectContainer = new Container(engine.renderer.gl);
+        effectContainer.name = "EffectDemoContainer";
+        effectContainer.transform.setPosition(20, 100);
+        effectContainer.set(20, 100, 800, 600);
+        engine.scene.addChild(effectContainer);
+
+        // 5.1 外阴影 + 圆角
+        const rect1 = new Container(engine.renderer.gl);
+        rect1.name = "OuterShadowRect";
+        rect1.transform.setPosition(50, 50);
+        rect1.set(50, 50, 200, 150);
+        rect1.style = {
+            backgroundColor: [1, 1, 1, 1],
+            borderRadius: 20,
+            borderColor: [0, 0, 0, 1],
+            borderWidth: 10,
+            strokeType: 'outer'
+        };
+        rect1.effects = {
+              outerShadow: {
+                  color: [0, 0, 0, 0.5],
+                  blur: 15,
+                  offsetX: 10,
+                  offsetY: 10,
+                  spread: 5
+              },
+              layerBlur: 2
+          };
+        effectContainer.addChild(rect1);
+
+        // 5.2 内阴影 + 渐变背景 (渐变通过样式扩展，目前先用纯色)
+        const rect2 = new Container(engine.renderer.gl);
+        rect2.name = "InnerShadowRect";
+        rect2.transform.setPosition(300, 50);
+        rect2.set(300, 50, 200, 150);
+        rect2.style = {
+            backgroundColor: [0.2, 0.6, 1, 1],
+            borderRadius: [40, 0, 40, 0],
+        };
+        rect2.effects = {
+            innerShadow: {
+                color: [0, 0, 0, 0.6],
+                blur: 15,
+                offsetX: 0,
+                offsetY: 0,
+                spread: 5
+            }
+        };
+        effectContainer.addChild(rect2);
+
+        // 5.3 背景模糊 (毛玻璃)
+        const rect3 = new Container(engine.renderer.gl);
+        rect3.name = "Glass Card";
+        rect3.transform.setPosition(50, 250);
+        rect3.set(50, 250, 450, 200);
+        rect3.style = {
+            backgroundColor: [1, 1, 1, 0.2],
+            borderRadius: 20,
+            borderColor: [1, 1, 1, 0.5],
+            borderWidth: 1,
+            strokeType: 'inner'
+        };
+        rect3.effects = {
+            backgroundBlur: 10,
+            innerShadow: {
+                color: [1, 1, 1, 0.5],
+                blur: 10,
+                offsetX: 0,
+                offsetY: 0,
+                spread: 2
+            }
+        };
+        effectContainer.addChild(rect3);
+
+        const glassText = new Text("Glassmorphism Effect");
+        glassText.transform.setPosition(20, 20);
+        glassText.fontSize = 24;
+        glassText.fillStyle = "white";
+        rect3.addChild(glassText);
+
+        // 5.4 裁剪示例
+        const clipContainer = new Container(engine.renderer.gl);
+        clipContainer.name = "ClipContainer";
+        clipContainer.set(400, 100, 200, 200);
+        clipContainer.style = {
+            backgroundColor: [0.2, 0.2, 0.2, 1],
+            borderRadius: 40,
+            clipChildren: true,
+            borderColor: [1, 1, 1, 1],
+            borderWidth: 2
+        };
+        effectContainer.addChild(clipContainer);
+
+        const childRect = new Container(engine.renderer.gl);
+        childRect.name = "OverflowingChild";
+        childRect.set(100, 100, 200, 200); // 故意超出父容器
+        childRect.style = {
+            backgroundColor: [1, 0, 0, 0.5],
+            borderRadius: 20
+        };
+        clipContainer.addChild(childRect);
     }
 }
 
@@ -174,71 +301,166 @@ requestAnimationFrame(loadBatch);
 console.log("Engine started");
 
 // ==========================================
-// UI Logic: Add Buttons to create components
+// UI Logic: Figma-style Toolbar at bottom center
 // ==========================================
 
-const uiContainer = document.createElement('div');
-uiContainer.style.position = 'absolute';
-uiContainer.style.top = '10px';
-uiContainer.style.right = '10px';
-uiContainer.style.display = 'flex';
-uiContainer.style.gap = '10px';
-document.body.appendChild(uiContainer);
+const toolbar = document.createElement('div');
+Object.assign(toolbar.style, {
+    position: 'absolute',
+    bottom: '24px',
+    left: 'calc(250px + (100% - 250px) / 2)',
+    transform: 'translateX(-50%)',
+    height: '40px',
+    backgroundColor: '#2c2c2c',
+    borderRadius: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 4px',
+    gap: '2px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.05)',
+    zIndex: '1000',
+    userSelect: 'none',
+    transition: 'left 0.3s ease' // Smooth move when property panel toggles
+});
+document.body.appendChild(toolbar);
 
-function createButton(label: string, onClick: () => void) {
-    const btn = document.createElement('button');
-    btn.innerText = label;
-    btn.style.padding = '8px 12px';
-    btn.style.fontSize = '14px';
-    btn.style.cursor = 'pointer';
-    btn.addEventListener('click', onClick);
-    uiContainer.appendChild(btn);
+// Update toolbar position when selection changes (because canvas size changes)
+const originalOnSelectionChange = engine.interaction.onSelectionChange;
+engine.interaction.onSelectionChange = () => {
+    if (originalOnSelectionChange) originalOnSelectionChange();
+    
+    // Adjust toolbar position based on whether property panel is shown
+    if (engine.auxLayer.selectedNode) {
+        toolbar.style.left = 'calc(250px + (100% - 250px - 240px) / 2)';
+    } else {
+        toolbar.style.left = 'calc(250px + (100% - 250px) / 2)';
+    }
+};
+
+// ---------------------------------------------------------
+// Node Creation Logic
+// ---------------------------------------------------------
+
+engine.interaction.onCreateNode = (type, x, y, w, h, parent) => {
+    // 1. 将世界坐标转换为父节点的局部坐标
+    const localPos = [x, y];
+    
+    // 如果有父节点且不是场景根节点，则进行坐标转换
+    if (parent && parent !== engine.scene) {
+        try {
+            const worldMatrix = (parent as any).getWorldMatrix();
+            if (worldMatrix) {
+                const invMatrix = mat3.create();
+                if (mat3.invert(invMatrix, worldMatrix)) {
+                    const out = vec2.create();
+                    vec2.transformMat3(out, vec2.fromValues(x, y), invMatrix);
+                    localPos[0] = out[0];
+                    localPos[1] = out[1];
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to transform coordinates for nested creation:', e);
+        }
+    }
+
+    let node;
+    if (type === 'frame') {
+        const container = new Container(engine.renderer.gl);
+        container.name = `Frame_${Math.floor(Math.random() * 1000)}`;
+        container.interactive = true;
+        container.set(localPos[0], localPos[1], w, h);
+        container.color = new Float32Array([0.2, 0.6, 1.0, 0.5]);
+        node = container;
+    } else {
+        const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+        const url = createDebugImage("Image", color, 100, 100);
+        const sprite = new Sprite(engine.renderer.gl, url);
+        sprite.interactive = true;
+        sprite.name = `Image_${Math.floor(Math.random() * 1000)}`;
+        sprite.set(localPos[0], localPos[1], w, h);
+        node = sprite;
+    }
+
+    if (node) {
+        // 确保添加到正确的父节点
+        const targetParent = parent || engine.scene;
+        targetParent.addChild(node);
+        engine.outline.update();
+    }
+    return node;
+};
+
+function createToolbarButton(label: string, icon: string, type: 'frame' | 'image') {
+    const btn = document.createElement('div');
+    btn.draggable = true; // Enable HTML5 drag and drop
+    Object.assign(btn.style, {
+        height: '32px',
+        padding: '0 12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '6px',
+        color: '#e0e0e0',
+        fontSize: '12px',
+        cursor: 'pointer',
+        borderRadius: '4px',
+        transition: 'background-color 0.2s',
+        whiteSpace: 'nowrap'
+    });
+
+    btn.innerHTML = `<span style="font-size: 16px;">${icon}</span> <span>${label}</span>`;
+
+    btn.addEventListener('mouseenter', () => {
+        btn.style.backgroundColor = '#444';
+    });
+    btn.addEventListener('mouseleave', () => {
+        if (engine.activeTool !== type) {
+            btn.style.backgroundColor = 'transparent';
+        }
+    });
+
+    // 1. Click to enter creation mode (draw size on canvas)
+    btn.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        if (engine.activeTool === type) {
+            engine.activeTool = null;
+            btn.style.backgroundColor = 'transparent';
+        } else {
+            engine.activeTool = type;
+            // Clear other buttons' background if needed, but here we just set this one
+            btn.style.backgroundColor = '#444';
+        }
+    });
+
+    // 2. Drag to create 100x100 element following mouse
+    btn.addEventListener('dragstart', (e) => {
+        // Set drag image to empty/transparent to avoid default ghost image
+        const img = new Image();
+        img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        e.dataTransfer?.setDragImage(img, 0, 0);
+        
+        // Use engine interaction to start drag creation
+        engine.interaction.startDragCreation(type, [e.clientX, e.clientY]);
+    });
+
+    btn.addEventListener('drag', (e) => {
+        if (e.clientX === 0 && e.clientY === 0) return; // Ignore final drag event
+        engine.interaction.updateDragCreation([e.clientX, e.clientY]);
+    });
+
+    btn.addEventListener('dragend', (e) => {
+        engine.interaction.endDragCreation([e.clientX, e.clientY]);
+    });
+
+    toolbar.appendChild(btn);
+    return btn;
 }
 
-// 1. Add Sprite Button
-createButton("添加图片 (Sprite)", () => {
-    // Create random color sprite
-    const color = `hsl(${Math.random() * 360}, 70%, 50%)`;
-    const url = createDebugImage("New Sprite", color, 100, 100);
+// 1. Add Container Button
+createToolbarButton("Frame", "⬜", 'frame');
 
-    const sprite = new Sprite(engine.renderer.gl, url);
-    // sprite.width = 100;
-    // sprite.height = 100;
-    sprite.set(sprite.x, sprite.y, 100, 100);
-
-    sprite.interactive = true;
-    sprite.name = `Sprite_${Math.floor(Math.random() * 1000)}`;
-
-    // Position at center of screen (approx, relative to scene)
-    // We should inverse transform screen center to scene local
-    // For simplicity, just put it at 400, 400 or random offset from current scene pos
-    // Better: Put it at (400, 400)
-    // sprite.x = 400 + Math.random() * 50;
-    // sprite.y = 400 + Math.random() * 50;
-    sprite.setPosition(400 + Math.random() * 50, 400 + Math.random() * 50);
-
-    engine.scene.addChild(sprite);
-    console.log(`Created ${sprite.name}`);
-});
-
-// 2. Add Container Button
-// 2. Add Container Button
-createButton("添加容器 (Container)", () => {
-    const container = new Container(engine.renderer.gl);
-    container.name = `Container_${Math.floor(Math.random() * 1000)}`;
-    container.setPosition(300 + Math.random() * 50, 300 + Math.random() * 50);
-    container.interactive = true;
-    // container.width = 200;
-    // container.height = 200;
-    container.set(container.x, container.y, 200, 200);
-
-
-    // Visual background set directly
-    container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
-
-    engine.scene.addChild(container);
-    console.log(`Created ${container.name}`);
-});
+// 2. Add Sprite Button
+createToolbarButton("Image", "🖼️", 'image');
 
 // ==========================================
 // Performance Stats & Debug Tools

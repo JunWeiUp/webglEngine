@@ -58,8 +58,9 @@ export class OutlineView {
         this.container.style.left = '0';
         this.container.style.width = '250px';
         this.container.style.height = '100vh';
-        this.container.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        this.container.style.color = 'white';
+        this.container.style.backgroundColor = '#2c2c2c';
+        this.container.style.borderRight = '1px solid #444';
+        this.container.style.color = '#e0e0e0';
         this.container.style.display = 'flex';
         this.container.style.flexDirection = 'column';
         this.container.style.zIndex = '1000';

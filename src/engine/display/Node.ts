@@ -4,6 +4,7 @@ import { Renderer } from '../core/Renderer';
 import type { IRenderer } from '../core/IRenderer';
 import type { Rect } from '../core/Rect';
 import { MatrixSpatialIndex } from '../core/MatrixSpatialIndex';
+import type { NodeStyle, NodeEffects } from './Effects';
 
 /**
  * Node 类
@@ -57,6 +58,8 @@ export class Node {
 
     /** 渲染顺序 (由 Renderer 计算，反映场景树的前序遍历顺序) */
     public renderOrder: number = 0;
+    /** 子树的最大渲染顺序 (用于判断子树范围) */
+    public endOrder: number = 0;
 
     /** 用于管理直接子节点的空间索引 (MatrixSpatialIndex) */
     public childSpatialIndex: MatrixSpatialIndex | null = null;
@@ -95,6 +98,11 @@ export class Node {
 
     /** 节点名称 (调试用，可选以节省内存) */
     public name?: string;
+
+    /** 样式配置 (矩形、背景、圆角等) */
+    public style: NodeStyle = {};
+    /** 效果配置 (阴影、模糊等) */
+    public effects: NodeEffects = {};
 
     /** 
      * 遍历节点树
@@ -412,10 +420,28 @@ export class Node {
     }
 
     /**
-     * WebGL 渲染方法 (需子类实现)
-     * @param _renderer 渲染器实例
+     * WebGL 渲染方法
+     * 基类处理背景样式和效果
+     * @param renderer 渲染器实例
      */
-    renderWebGL(_renderer: IRenderer) { }
+    renderWebGL(renderer: IRenderer) {
+        // 优化：仅在确实有样式或效果且具有可见性时才触发特效渲染
+        const style = this.style;
+        const hasBg = style.backgroundColor && style.backgroundColor[3] > 0;
+        const hasBorder = style.borderWidth && style.borderWidth > 0 && style.borderColor && style.borderColor[3] > 0;
+        const hasNodeColor = (this as any).color && (this as any).color[3] > 0;
+        
+        const hasVisibleStyle = hasBg || hasBorder || hasNodeColor;
+        const hasEffects = (this.effects.outerShadow && this.effects.outerShadow.color[3] > 0) ||
+                           (this.effects.innerShadow && this.effects.innerShadow.color[3] > 0) ||
+                           (this.effects.backgroundBlur && this.effects.backgroundBlur > 0);
+        
+        if (this.width > 0 && this.height > 0 && (hasVisibleStyle || hasEffects)) {
+            if ('drawRectWithEffects' in renderer && typeof (renderer as any).drawRectWithEffects === 'function') {
+                (renderer as any).drawRectWithEffects(this);
+            }
+        }
+    }
 
     /**
      * 销毁节点及其子节点，释放资源

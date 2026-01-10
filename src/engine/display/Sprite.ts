@@ -105,6 +105,20 @@ export class Sprite extends Node {
         // 记录最后一次可见时间 (使用全局缓存的时间戳)
         this._lastVisibleTime = Renderer.currentTime;
 
+        const hasEffects = Object.keys(this.effects).length > 0 || 
+                          this.style.borderRadius || 
+                          this.style.backgroundColor || 
+                          this.style.borderWidth;
+        
+        // 如果有圆角等特效，且只是一个纯色块（使用白色纹理），则由 super.renderWebGL() 中的 drawRectWithEffects 处理背景色
+        // 我们跳过这里的批处理绘制，以避免重复绘制（且批处理是直角的）
+        const isPureColorWithEffects = hasEffects && (!this._texture || this._texture === TextureManager.getWhiteTexture());
+
+        // 调用基类渲染效果和背景
+        super.renderWebGL(renderer);
+
+        if (isPureColorWithEffects) return;
+
         // 按需加载逻辑
         if (!this._texture && this._textureUrl && !this._isLoading) {
             this._isLoading = true;
