@@ -1,6 +1,7 @@
 import { Node } from '../display/Node';
 import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from './Rect';
+import type { IRenderer } from './IRenderer';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 import { MatrixSpatialIndex } from './MatrixSpatialIndex';
 import type { Engine } from '../Engine';
@@ -8,7 +9,7 @@ import type { Engine } from '../Engine';
 /**
  * 核心渲染器类
  */
-export class Renderer {
+export class Renderer implements IRenderer {
     public gl: WebGL2RenderingContext;
     public static instance: Renderer | null = null;
     public ctx: CanvasRenderingContext2D;
@@ -16,6 +17,9 @@ export class Renderer {
     public height: number;
 
     private shaderProgram: WebGLProgram | null = null;
+    private uniformLocations: Map<string, WebGLUniformLocation | null> = new Map();
+    private lastUsedProgram: WebGLProgram | null = null;
+    private lastBoundTexture: (WebGLTexture | null)[] = [];
 
     // 批处理渲染状态
     private static readonly MAX_QUADS = 10000; // 最大批处理 Quad 数量
@@ -33,26 +37,19 @@ export class Renderer {
         frameCount: 0,
         lastFPS: 0,
         smoothTimes: {
-            transform: 0,
             renderWebGL: 0,
             flush: 0,
             logic: 0,
-            hitTest: 0,   // 新增：拾取检测耗时
-            boxSelect: 0, // 新增：框选耗时
-            nodeTransform: 0, // 新增：节点变换更新耗时
-            interactionToRender: 0, // 新增：从交互到渲染的完整耗时
+            canvas2D: 0,
+            interactionToRender: 0,
             total: 0
         },
         times: {
-            transform: 0,
             renderWebGL: 0,
-            canvas2D: 0,
             flush: 0,
             logic: 0,
-            hitTest: 0,   // 新增：拾取检测耗时
-            boxSelect: 0, // 新增：框选耗时
-            nodeTransform: 0, // 新增：节点变换更新耗时
-            interactionToRender: 0, // 新增：从交互到渲染的完整耗时
+            canvas2D: 0,
+            interactionToRender: 0,
             total: 0
         }
     };
@@ -138,6 +135,8 @@ export class Renderer {
         this.resize(this.width, this.height);
         this.initWebGL();
         this.lastFPSUpdateTime = performance.now();
+
+        this.lastBoundTexture = new Array(this.maxTextures).fill(null);
 
         // 预分配矩阵栈空间
         for (let i = 0; i < Renderer.MAX_STACK_DEPTH; i++) {
@@ -360,6 +359,16 @@ void main() {
         return program;
     }
 
+    private getUniformLocation(name: string): WebGLUniformLocation | null {
+        if (!this.shaderProgram) return null;
+        if (this.uniformLocations.has(name)) {
+            return this.uniformLocations.get(name)!;
+        }
+        const loc = this.gl.getUniformLocation(this.shaderProgram, name);
+        this.uniformLocations.set(name, loc);
+        return loc;
+    }
+
     /**
      * 标记场景结构已改变，需要重新计算渲染顺序
      */
@@ -409,8 +418,6 @@ void main() {
             this.updateRenderOrder(scene);
             this._structureDirty = false;
         }
-
-        this.stats.times.nodeTransform = 0; // MatrixSpatialIndex 不需要单独的全局同步步阶
 
         // 2. 设置 WebGL 状态
         if (dirtyRect) {
@@ -522,20 +529,12 @@ void main() {
     }
 
 
-    /**
-     * 恢复 2D Canvas 状态 (No-op)
-     */
-    public restoreCanvas2D(_dirtyRect?: Rect) {
-        // No-op
+    public getViewMatrixInverse() {
+        return this.viewMatrixInverse;
     }
 
-    // 废弃的辅助方法 (为了兼容旧接口暂时保留)
-    public bindQuad() {
-        // No-op in batch mode
-    }
-
-    public getProjectionMatrix(): mat3 {
-        return this.projectionMatrix;
+    public getProgram() {
+        return this.shaderProgram!;
     }
 
     /**
@@ -584,13 +583,11 @@ void main() {
         return this.viewMatrix;
     }
 
-    public getViewMatrixInverse() {
-        return this.viewMatrixInverse;
+    public getProjectionMatrix() {
+        return this.projectionMatrix;
     }
 
-    public getProgram() {
-        return this.shaderProgram!;
-    }
+
 
     /**
      * 更新平滑性能统计数据
@@ -600,13 +597,11 @@ void main() {
         const st = this.stats.smoothTimes;
         const t = this.stats.times;
 
-        st.transform = st.transform * (1 - alpha) + t.transform * alpha;
         st.renderWebGL = st.renderWebGL * (1 - alpha) + t.renderWebGL * alpha;
         st.flush = st.flush * (1 - alpha) + t.flush * alpha;
         st.logic = st.logic * (1 - alpha) + t.logic * alpha;
-        st.hitTest = st.hitTest * (1 - alpha) + t.hitTest * alpha;
-        st.boxSelect = st.boxSelect * (1 - alpha) + t.boxSelect * alpha;
-        st.nodeTransform = st.nodeTransform * (1 - alpha) + t.nodeTransform * alpha;
+        st.canvas2D = st.canvas2D * (1 - alpha) + t.canvas2D * alpha;
+        st.interactionToRender = st.interactionToRender * (1 - alpha) + t.interactionToRender * alpha;
         st.total = st.total * (1 - alpha) + t.total * alpha;
     }
 
@@ -619,7 +614,11 @@ void main() {
         const gl = this.gl;
         const program = this.shaderProgram!;
 
-        gl.useProgram(program);
+        // 状态缓存：避免重复 useProgram
+        if (this.lastUsedProgram !== program) {
+            gl.useProgram(program);
+            this.lastUsedProgram = program;
+        }
 
         // 上传顶点数据
         if (this.dynamicVertexBuffer) {
@@ -632,25 +631,33 @@ void main() {
         // 绑定索引缓冲区
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
 
-        // 绑定多纹理
+        // 绑定多纹理 (状态缓存：避免重复 bindTexture)
         for (let i = 0; i < this.textureSlots.length; i++) {
-            gl.activeTexture(gl.TEXTURE0 + i);
-            gl.bindTexture(gl.TEXTURE_2D, this.textureSlots[i]);
+            const tex = this.textureSlots[i];
+            if (this.lastBoundTexture[i] !== tex) {
+                gl.activeTexture(gl.TEXTURE0 + i);
+                gl.bindTexture(gl.TEXTURE_2D, tex);
+                this.lastBoundTexture[i] = tex;
+            }
         }
 
-        // 设置 u_textures uniform 数组
-        const uTexturesLocation = gl.getUniformLocation(program, "u_textures");
+        // 设置 u_textures uniform 数组 (仅在初次或变化时设置，但 IV 数组通常不怎么变，这里保持简单)
+        const uTexturesLocation = this.getUniformLocation("u_textures");
         if (uTexturesLocation) {
             gl.uniform1iv(uTexturesLocation, this.textureIndices);
         }
 
         // 设置投影矩阵
-        const uProjectionLocation = gl.getUniformLocation(program, "u_projectionMatrix");
-        gl.uniformMatrix3fv(uProjectionLocation, false, this.projectionMatrix);
+        const uProjectionLocation = this.getUniformLocation("u_projectionMatrix");
+        if (uProjectionLocation) {
+            gl.uniformMatrix3fv(uProjectionLocation, false, this.projectionMatrix);
+        }
 
         // 设置视图矩阵
-        const uViewLocation = gl.getUniformLocation(program, "u_viewMatrix");
-        gl.uniformMatrix3fv(uViewLocation, false, this.viewMatrix);
+        const uViewLocation = this.getUniformLocation("u_viewMatrix");
+        if (uViewLocation) {
+            gl.uniformMatrix3fv(uViewLocation, false, this.viewMatrix);
+        }
 
         // 执行绘制调用 (Draw Call)
         gl.drawElements(gl.TRIANGLES, this.currentQuadCount * 6, gl.UNSIGNED_SHORT, 0);
@@ -661,8 +668,11 @@ void main() {
 
         // 重置批处理状态
         this.currentQuadCount = 0;
-        this.textureSlots = [];
+        this.textureSlots.length = 0; // 使用 length = 0 保持引用，减少分配
     }
+
+    private lastTexture: WebGLTexture | null = null;
+    private lastTextureIndex: number = -1;
 
     /**
      * 高性能绘制 Quad，避免 Float32Array 分配
@@ -683,24 +693,32 @@ void main() {
         uvs: Float32Array,
         color: Float32Array
     ) {
-        // 查找或添加纹理到槽位
-        let textureIndex = this.textureSlots.indexOf(texture);
+        // 优化：快速检查是否是上一个纹理
+        let textureIndex = (this.lastTexture === texture) ? this.lastTextureIndex : -1;
 
         if (textureIndex === -1) {
-            if (this.textureSlots.length >= this.maxTextures) {
-                this.flush();
-                textureIndex = 0;
-                this.textureSlots.push(texture);
-            } else {
-                textureIndex = this.textureSlots.length;
-                this.textureSlots.push(texture);
+            textureIndex = this.textureSlots.indexOf(texture);
+            
+            if (textureIndex === -1) {
+                if (this.textureSlots.length >= this.maxTextures) {
+                    this.flush();
+                    textureIndex = 0;
+                    this.textureSlots.push(texture);
+                } else {
+                    textureIndex = this.textureSlots.length;
+                    this.textureSlots.push(texture);
+                }
             }
+            this.lastTexture = texture;
+            this.lastTextureIndex = textureIndex;
         }
 
         if (this.currentQuadCount >= Renderer.MAX_QUADS) {
             this.flush();
             textureIndex = 0;
             this.textureSlots.push(texture);
+            this.lastTexture = texture;
+            this.lastTextureIndex = textureIndex;
         }
 
         const offset = this.currentQuadCount * 4 * Renderer.VERTEX_SIZE;
@@ -731,63 +749,6 @@ void main() {
         data[idx++] = uvs[6]; data[idx++] = uvs[7];
         data[idx++] = r; data[idx++] = g; data[idx++] = b; data[idx++] = a;
         data[idx++] = textureIndex;
-
-        this.currentQuadCount++;
-    }
-
-    /**
-     * 添加一个 Quad 到批处理队列
-     * @deprecated Use drawQuadFast instead to avoid GC
-     */
-    public drawQuad(texture: WebGLTexture, vertices: Float32Array, uvs: Float32Array, color: Float32Array) {
-        // 查找或添加纹理到槽位
-        let textureIndex = this.textureSlots.indexOf(texture);
-
-        if (textureIndex === -1) {
-            // 如果纹理槽已满，先 Flush
-            if (this.textureSlots.length >= this.maxTextures) {
-                this.flush();
-                textureIndex = 0;
-                this.textureSlots.push(texture);
-            } else {
-                textureIndex = this.textureSlots.length;
-                this.textureSlots.push(texture);
-            }
-        }
-
-        // 如果 Quad 数量已满，先 Flush
-        if (this.currentQuadCount >= Renderer.MAX_QUADS) {
-            this.flush();
-            // Flush 后需重新添加纹理
-            textureIndex = 0;
-            this.textureSlots.push(texture);
-        }
-
-        // 填充顶点数据到 Buffer
-        const offset = this.currentQuadCount * 4 * Renderer.VERTEX_SIZE;
-        const data = this.vertexBufferData;
-
-        // 4 个顶点
-        for (let i = 0; i < 4; i++) {
-            const idx = offset + i * Renderer.VERTEX_SIZE;
-
-            // Pos (x, y)
-            data[idx + 0] = vertices[i * 2 + 0];
-            data[idx + 1] = vertices[i * 2 + 1];
-
-            // UV (u, v)
-            data[idx + 2] = uvs[i * 2 + 0];
-            data[idx + 3] = uvs[i * 2 + 1];
-
-            // Color (r, g, b, a)
-            data[idx + 4] = color[0];
-            data[idx + 5] = color[1];
-            data[idx + 6] = color[2];
-            data[idx + 7] = color[3];
-
-            // Texture Index
-            data[idx + 8] = textureIndex;
-        }
 
         this.currentQuadCount++;
     }

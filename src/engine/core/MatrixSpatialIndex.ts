@@ -216,14 +216,15 @@ export class MatrixSpatialIndex {
 
             // 检测节点自身 (精确检测)
             if (node.interactive) {
-                const nodeLocalPos = vec2.create();
-                const nodeInvertLocal = mat3.create();
-                mat3.invert(nodeInvertLocal, node.transform.localMatrix);
-                vec2.transformMat3(nodeLocalPos, localPos, nodeInvertLocal);
+                const nodeLocalPos = this._tempVecs[1];
+                const nodeInvertLocal = this._tempMat;
+                if (mat3.invert(nodeInvertLocal, node.transform.localMatrix)) {
+                    vec2.transformMat3(nodeLocalPos, localPos, nodeInvertLocal);
 
-                if (nodeLocalPos[0] >= 0 && nodeLocalPos[0] <= node.width &&
-                    nodeLocalPos[1] >= 0 && nodeLocalPos[1] <= node.height) {
-                    return node;
+                    if (nodeLocalPos[0] >= 0 && nodeLocalPos[0] <= node.width &&
+                        nodeLocalPos[1] >= 0 && nodeLocalPos[1] <= node.height) {
+                        return node;
+                    }
                 }
             }
         }

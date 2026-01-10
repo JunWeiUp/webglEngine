@@ -3,7 +3,6 @@ import { Node } from './display/Node';
 import { InteractionManager } from './events/InteractionManager';
 import { OutlineView } from './ui/OutlineView';
 import { AuxiliaryLayer } from './display/AuxiliaryLayer';
-import { PerfHUD } from './ui/PerfHUD';
 import type { Rect } from './core/Rect';
 import { AtlasManager } from './utils/AtlasManager';
 import { MatrixSpatialIndex } from './core/MatrixSpatialIndex';
@@ -26,7 +25,6 @@ export class Engine {
     public interaction: InteractionManager;
     public outline: OutlineView;
     public auxLayer: AuxiliaryLayer;
-    public perfHUD: PerfHUD;
     public alwaysRender: boolean = false;
 
     // 渲染请求 ID (防抖动)
@@ -99,9 +97,6 @@ export class Engine {
 
         // 初始渲染
         this.requestRender();
-
-        // 初始化性能监控面板
-        this.perfHUD = new PerfHUD(container, this.renderer);
     }
 
     /**

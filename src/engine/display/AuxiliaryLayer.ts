@@ -1,6 +1,7 @@
 import { Node } from './Node';
 import { mat3, vec2 } from 'gl-matrix';
 import type { Rect } from '../core/Rect';
+import type { IRenderer } from '../core/IRenderer';
 
 export type HandleType = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
 
@@ -21,6 +22,15 @@ export class AuxiliaryLayer {
     public hoveredHandle: HandleType | null = null;
     public activeHandle: HandleType | null = null;
     public alignmentLines: AlignmentLine[] = [];
+
+    // --- 预分配临时变量 (GC 优化) ---
+    private _tempMat3a = mat3.create();
+    private _tempMat3b = mat3.create();
+    private _tempVec2a = vec2.create();
+    private _tempVec2b = vec2.create();
+    private _tempVec2c = vec2.create();
+    private _tempVec2d = vec2.create();
+    private _tempCorners = [vec2.create(), vec2.create(), vec2.create(), vec2.create()];
 
     // Multi-selection support
     public selectedNodes: Set<Node> = new Set();
@@ -50,7 +60,7 @@ export class AuxiliaryLayer {
     constructor() { }
 
 
-    render(ctx: CanvasRenderingContext2D, scene: Node, renderer: any, dirtyRect?: Rect) {
+    render(ctx: CanvasRenderingContext2D, scene: Node, renderer: IRenderer, dirtyRect?: Rect) {
         const viewMatrix = renderer.getViewMatrix();
         // Reset transform to identity to draw in screen space
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -109,8 +119,8 @@ export class AuxiliaryLayer {
             const end = this.selectionRect.end;
 
             // 转换世界坐标到屏幕坐标
-            const sStart = vec2.create();
-            const sEnd = vec2.create();
+            const sStart = this._tempVec2a;
+            const sEnd = this._tempVec2b;
             vec2.transformMat3(sStart, start, viewMatrix);
             vec2.transformMat3(sEnd, end, viewMatrix);
 
@@ -154,15 +164,19 @@ export class AuxiliaryLayer {
                 ctx.beginPath();
                 if (line.type === 'v') {
                     // Vertical line: constant X in screen space
-                    const screenPos = vec2.create();
-                    vec2.transformMat3(screenPos, vec2.fromValues(line.value, 0), viewMatrix);
+                    const screenPos = this._tempVec2a;
+                    const worldPos = this._tempVec2b;
+                    vec2.set(worldPos, line.value, 0);
+                    vec2.transformMat3(screenPos, worldPos, viewMatrix);
                     const x = screenPos[0];
                     ctx.moveTo(x, 0);
                     ctx.lineTo(x, height);
                 } else {
                     // Horizontal line: constant Y in screen space
-                    const screenPos = vec2.create();
-                    vec2.transformMat3(screenPos, vec2.fromValues(0, line.value), viewMatrix);
+                    const screenPos = this._tempVec2a;
+                    const worldPos = this._tempVec2b;
+                    vec2.set(worldPos, 0, line.value);
+                    vec2.transformMat3(screenPos, worldPos, viewMatrix);
                     const y = screenPos[1];
                     ctx.moveTo(0, y);
                     ctx.lineTo(width, y);
@@ -183,29 +197,28 @@ export class AuxiliaryLayer {
 
     private getGlobalScale(node: Node, viewMatrix: mat3): number {
         // Approximate global scale including view matrix
-        const m = mat3.create();
+        const m = this._tempMat3a;
         mat3.multiply(m, viewMatrix, node.getWorldMatrix());
         return Math.hypot(m[0], m[1]);
     }
 
     private getScreenBounds(node: Node, viewMatrix: mat3): { minX: number, minY: number, maxX: number, maxY: number } | null {
         // Combined matrix: view * world
-        const combined = mat3.create();
+        const combined = this._tempMat3a;
         mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
         // Transform 4 corners of the node to screen space
         // Node local corners: (0,0), (w,0), (w,h), (0,h)
-        const corners = [
-            vec2.fromValues(0, 0),
-            vec2.fromValues(node.width, 0),
-            vec2.fromValues(node.width, node.height),
-            vec2.fromValues(0, node.height)
-        ];
+        const corners = this._tempCorners;
+        vec2.set(corners[0], 0, 0);
+        vec2.set(corners[1], node.width, 0);
+        vec2.set(corners[2], node.width, node.height);
+        vec2.set(corners[3], 0, node.height);
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
+        const screen = this._tempVec2b;
         for (const p of corners) {
-            const screen = vec2.create();
             vec2.transformMat3(screen, p, combined);
             minX = Math.min(minX, screen[0]);
             minY = Math.min(minY, screen[1]);
@@ -217,27 +230,30 @@ export class AuxiliaryLayer {
     }
 
     public getHandles(node: Node, viewMatrix: mat3): Handle[] {
-        const combined = mat3.create();
+        const combined = this._tempMat3a;
         mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
         const w = node.width;
         const h = node.height;
 
-        const positions: { type: HandleType, pos: vec2 }[] = [
-            { type: 'nw', pos: vec2.fromValues(0, 0) },
-            { type: 'n', pos: vec2.fromValues(w / 2, 0) },
-            { type: 'ne', pos: vec2.fromValues(w, 0) },
-            { type: 'e', pos: vec2.fromValues(w, h / 2) },
-            { type: 'se', pos: vec2.fromValues(w, h) },
-            { type: 's', pos: vec2.fromValues(w / 2, h) },
-            { type: 'sw', pos: vec2.fromValues(0, h) },
-            { type: 'w', pos: vec2.fromValues(0, h / 2) },
+        const handleConfigs: { type: HandleType, lx: number, ly: number }[] = [
+            { type: 'nw', lx: 0, ly: 0 },
+            { type: 'n', lx: w / 2, ly: 0 },
+            { type: 'ne', lx: w, ly: 0 },
+            { type: 'e', lx: w, ly: h / 2 },
+            { type: 'se', lx: w, ly: h },
+            { type: 's', lx: w / 2, ly: h },
+            { type: 'sw', lx: 0, ly: h },
+            { type: 'w', lx: 0, ly: h / 2 },
         ];
 
-        return positions.map(p => {
-            const screen = vec2.create();
-            vec2.transformMat3(screen, p.pos, combined);
-            return { type: p.type, x: screen[0], y: screen[1] };
+        const localPos = this._tempVec2b;
+        const screenPos = this._tempVec2c;
+
+        return handleConfigs.map(config => {
+            vec2.set(localPos, config.lx, config.ly);
+            vec2.transformMat3(screenPos, localPos, combined);
+            return { type: config.type, x: screenPos[0], y: screenPos[1] };
         });
     }
 
@@ -285,19 +301,18 @@ export class AuxiliaryLayer {
         }
 
         // Combined matrix: view * world
-        const combined = mat3.create();
+        const combined = this._tempMat3a;
         mat3.multiply(combined, viewMatrix, node.getWorldMatrix());
 
-        const corners = [
-            vec2.fromValues(0, 0),
-            vec2.fromValues(node.width, 0),
-            vec2.fromValues(node.width, node.height),
-            vec2.fromValues(0, node.height)
-        ];
+        const corners = this._tempCorners;
+        vec2.set(corners[0], 0, 0);
+        vec2.set(corners[1], node.width, 0);
+        vec2.set(corners[2], node.width, node.height);
+        vec2.set(corners[3], 0, node.height);
 
+        const screen = this._tempVec2b;
         ctx.beginPath();
         for (let i = 0; i < 4; i++) {
-            const screen = vec2.create();
             vec2.transformMat3(screen, corners[i], combined);
             if (i === 0) ctx.moveTo(screen[0], screen[1]);
             else ctx.lineTo(screen[0], screen[1]);

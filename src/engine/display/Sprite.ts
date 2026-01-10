@@ -52,13 +52,6 @@ export class Sprite extends Node {
         this._color = value;
     }
 
-    // --- 渲染优化共享缓冲区 (静态) ---
-    // 避免每帧创建新数组
-    private static sharedVertices: Float32Array = (() => {
-        const arr = new Float32Array(8);
-        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'Sprite_sharedVertices', arr.byteLength, 'Sprite Shared Vertices');
-        return arr;
-    })();
     // sharedUVs 不再静态共享，因为每个 Sprite 可能不同 (Atlas)
     // 但全屏纹理的 UV 是固定的，Texture 类默认提供。
 
@@ -108,7 +101,7 @@ export class Sprite extends Node {
      * WebGL 渲染实现
      * 计算世界坐标并提交给渲染器进行批处理
      */
-    renderWebGL(renderer: Renderer, cullingRect?: Rect) {
+    renderWebGL(renderer: IRenderer, cullingRect?: Rect) {
         // 记录最后一次可见时间 (使用全局缓存的时间戳)
         this._lastVisibleTime = Renderer.currentTime;
 
@@ -140,31 +133,15 @@ export class Sprite extends Node {
         const m10 = m[3], m11 = m[4];
         const m20 = m[6], m21 = m[7];
 
-        const v = Sprite.sharedVertices;
-
-        // 0: Top-Left (0, 0)
-        v[0] = m20;
-        v[1] = m21;
-
-        // 1: Top-Right (w, 0)
-        v[2] = m00 * w + m20;
-        v[3] = m01 * w + m21;
-
-        // 2: Bottom-Right (w, h)
-        v[4] = m00 * w + m10 * h + m20;
-        v[5] = m01 * w + m11 * h + m21;
-
-        // 3: Bottom-Left (0, h)
-        v[6] = m10 * h + m20;
-        v[7] = m11 * h + m21;
-
         // 提交到渲染器批次
-        // 注意：现在传递 texture.baseTexture 和 texture.uvs
         const baseTexture = tex.baseTexture;
         if (baseTexture) {
-            renderer.drawQuad(
+            renderer.drawQuadFast(
                 baseTexture,
-                Sprite.sharedVertices,
+                m20, m21,                                   // TL (0, 0)
+                m00 * w + m20, m01 * w + m21,               // TR (w, 0)
+                m00 * w + m10 * h + m20, m01 * w + m11 * h + m21, // BR (w, h)
+                m10 * h + m20, m11 * h + m21,               // BL (0, h)
                 tex.uvs,
                 this.color
             );

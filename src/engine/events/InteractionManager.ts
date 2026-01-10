@@ -32,6 +32,12 @@ export class InteractionManager {
     private isPanning: boolean = false;
     private isBoxSelecting: boolean = false;
 
+    // 性能优化：预分配对象以减少 GC
+    private _tempVec2a = vec2.create();
+    private _tempVec2b = vec2.create();
+    private _tempMat3a = mat3.create();
+    private _tempMat3b = mat3.create();
+
     // 摄像机状态 (取代直接修改 scene 坐标)
     private cameraX: number = 0;
     private cameraY: number = 0;
@@ -126,30 +132,31 @@ export class InteractionManager {
     /**
      * 获取鼠标相对于 Canvas 的坐标 (屏幕空间)
      */
-    private getMousePos(e: MouseEvent): vec2 {
+    private getMousePos(e: MouseEvent, out?: vec2): vec2 {
         const canvas = this.renderer.ctx.canvas;
+        const res = out || vec2.create();
         // 只有 HTMLCanvasElement 有 getBoundingClientRect
         if (canvas instanceof HTMLCanvasElement) {
             const rect = canvas.getBoundingClientRect();
-            return vec2.fromValues(e.clientX - rect.left, e.clientY - rect.top);
+            return vec2.set(res, e.clientX - rect.left, e.clientY - rect.top);
         }
         // 对于 OffscreenCanvas 或其他情况，尝试使用默认值
-        return vec2.fromValues(e.offsetX || 0, e.offsetY || 0);
+        return vec2.set(res, e.offsetX || 0, e.offsetY || 0);
     }
 
     /**
      * 获取鼠标的世界坐标
      */
-    private getWorldMousePos(e: MouseEvent | vec2): vec2 {
+    private getWorldMousePos(e: MouseEvent | vec2, out?: vec2): vec2 {
+        const res = out || vec2.create();
         let pos: vec2;
         if ('clientX' in (e as any)) {
-            pos = this.getMousePos(e as MouseEvent);
+            pos = this.getMousePos(e as MouseEvent, this._tempVec2a);
         } else {
             pos = e as vec2;
         }
-        const worldPos = vec2.create();
-        vec2.transformMat3(worldPos, pos, this.renderer.getViewMatrixInverse());
-        return worldPos;
+        vec2.transformMat3(res, pos, this.renderer.getViewMatrixInverse());
+        return res;
     }
 
     /**
@@ -178,15 +185,16 @@ export class InteractionManager {
                 worldPos[1] >= bounds.y && worldPos[1] <= bounds.y + bounds.height) {
 
                 // 进一步精确检测：将世界坐标转换到节点的局部坐标系
-                const localPos = vec2.create();
-                const invertWorld = mat3.create();
-                mat3.invert(invertWorld, node.getWorldMatrix());
-                vec2.transformMat3(localPos, worldPos, invertWorld);
+                const localPos = this._tempVec2a;
+                const invertWorld = this._tempMat3a;
+                if (mat3.invert(invertWorld, node.getWorldMatrix())) {
+                    vec2.transformMat3(localPos, worldPos, invertWorld);
 
-                // 检查是否在节点的矩形范围内 (0, 0) 到 (width, height)
-                if (localPos[0] >= 0 && localPos[0] <= node.width &&
-                    localPos[1] >= 0 && localPos[1] <= node.height) {
-                    return node;
+                    // 检查是否在节点的矩形范围内 (0, 0) 到 (width, height)
+                    if (localPos[0] >= 0 && localPos[0] <= node.width &&
+                        localPos[1] >= 0 && localPos[1] <= node.height) {
+                        return node;
+                    }
                 }
             }
         }
@@ -294,12 +302,14 @@ export class InteractionManager {
 
             const siblingMatrix = sibling.getWorldMatrix();
             sXLines.forEach((lx, i) => {
-                const worldPos = vec2.fromValues(i * sibling.width / 2, 0);
+                const worldPos = this._tempVec2a;
+                vec2.set(worldPos, i * sibling.width / 2, 0);
                 vec2.transformMat3(worldPos, worldPos, siblingMatrix);
                 xTargets.push({ value: lx, worldX: worldPos[0] });
             });
             sYLines.forEach((ly, i) => {
-                const worldPos = vec2.fromValues(0, i * sibling.height / 2);
+                const worldPos = this._tempVec2a;
+                vec2.set(worldPos, 0, i * sibling.height / 2);
                 vec2.transformMat3(worldPos, worldPos, siblingMatrix);
                 yTargets.push({ value: ly, worldY: worldPos[1] });
             });
@@ -310,14 +320,16 @@ export class InteractionManager {
         const pYLines = [0, parent.height / 2, parent.height];
         const parentMatrix = parent.getWorldMatrix();
         pXLines.forEach((lx, i) => {
-            const localPos = vec2.fromValues(i * parent.width / 2, 0);
-            const worldPos = vec2.create();
+            const localPos = this._tempVec2a;
+            vec2.set(localPos, i * parent.width / 2, 0);
+            const worldPos = this._tempVec2b;
             vec2.transformMat3(worldPos, localPos, parentMatrix);
             xTargets.push({ value: lx, worldX: worldPos[0] });
         });
         pYLines.forEach((ly, i) => {
-            const localPos = vec2.fromValues(0, i * parent.height / 2);
-            const worldPos = vec2.create();
+            const localPos = this._tempVec2a;
+            vec2.set(localPos, 0, i * parent.height / 2);
+            const worldPos = this._tempVec2b;
             vec2.transformMat3(worldPos, localPos, parentMatrix);
             yTargets.push({ value: ly, worldY: worldPos[1] });
         });
@@ -362,9 +374,9 @@ export class InteractionManager {
      */
     private onMouseDown(e: MouseEvent) {
         this.engine.recordInteractionTime();
-        const pos = this.getMousePos(e);
-        const worldPos = this.getWorldMousePos(pos);
-        this.lastMousePos = pos;
+        const pos = this.getMousePos(e, this._tempVec2a);
+        const worldPos = this.getWorldMousePos(pos, this._tempVec2b);
+        vec2.copy(this.lastMousePos, pos);
         vec2.copy(this.dragStartMousePos, worldPos);
         this.dragStartNodesState.clear();
 
@@ -423,21 +435,22 @@ export class InteractionManager {
         if (node === this.scene) return { x: 0, y: 0, width: this.renderer.width, height: this.renderer.height };
 
         const viewMatrix = this.renderer.getViewMatrix();
-        const combined = mat3.create();
+        const combined = this._tempMat3a;
         mat3.multiply(combined, viewMatrix, node.transform.worldMatrix);
 
         const corners = [
-            vec2.fromValues(0, 0),
-            vec2.fromValues(node.width, 0),
-            vec2.fromValues(node.width, node.height),
-            vec2.fromValues(0, node.height)
+            [0, 0],
+            [node.width, 0],
+            [node.width, node.height],
+            [0, node.height]
         ];
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
+        const screen = this._tempVec2a;
         for (const p of corners) {
-            const screen = vec2.create();
-            vec2.transformMat3(screen, p, combined);
+            vec2.set(screen, p[0], p[1]);
+            vec2.transformMat3(screen, screen, combined);
             minX = Math.min(minX, screen[0]);
             minY = Math.min(minY, screen[1]);
             maxX = Math.max(maxX, screen[0]);
@@ -494,16 +507,17 @@ export class InteractionManager {
             const totalWorldDeltaY = worldPos[1] - this.dragStartMousePos[1];
 
             // Convert total world delta to local delta
-            const parentNode = node.parent;
-            let localDeltaX = totalWorldDeltaX;
-            let localDeltaY = totalWorldDeltaY;
-            if (parentNode) {
-                const invertParent = mat3.create();
-                mat3.invert(invertParent, parentNode.transform.worldMatrix);
+        const parentNode = node.parent;
+        let localDeltaX = totalWorldDeltaX;
+        let localDeltaY = totalWorldDeltaY;
+        if (parentNode) {
+            const invertParent = this._tempMat3b;
+            if (mat3.invert(invertParent, parentNode.transform.worldMatrix)) {
                 const m = invertParent;
                 localDeltaX = totalWorldDeltaX * m[0] + totalWorldDeltaY * m[3];
                 localDeltaY = totalWorldDeltaX * m[1] + totalWorldDeltaY * m[4];
             }
+        }
 
             // Logical size/position based on start state and total delta
             let newX = startState.x;
@@ -662,10 +676,10 @@ export class InteractionManager {
                 const startState = this.dragStartNodesState.get(node);
                 if (!startState) continue;
 
-                const parent = node.parent;
-                if (parent) {
-                    const invertParent = mat3.create();
-                    mat3.invert(invertParent, parent.getWorldMatrix());
+            const parent = node.parent;
+            if (parent) {
+                const invertParent = this._tempMat3b;
+                if (mat3.invert(invertParent, parent.getWorldMatrix())) {
                     const m = invertParent;
 
                     // Convert total world delta to local delta for this node
@@ -693,6 +707,7 @@ export class InteractionManager {
                     node.setPosition(newX, newY);
 
                 }
+            }
             }
 
 
@@ -755,7 +770,7 @@ export class InteractionManager {
         if (this.scene.childSpatialIndex) {
             const results: Node[] = [];
             this.scene.childSpatialIndex.queryRecursive(
-                mat3.create(), // 框选是在世界空间进行的，传入单位矩阵作为视图
+                mat3.identity(this._tempMat3a), // 框选是在世界空间进行的，传入单位矩阵作为视图
                 this.scene.getWorldMatrix(),
                 selectionRect,
                 results
@@ -816,7 +831,7 @@ export class InteractionManager {
 
                 for (const draggingNode of topLevelNodes) {
                     // 1. 记录当前的世界坐标
-                    const worldPos = vec2.create();
+                    const worldPos = this._tempVec2a;
                     const wm = draggingNode.getWorldMatrix(); // 确保获取的是最新的
                     vec2.set(worldPos, wm[6], wm[7]);
 
@@ -824,9 +839,9 @@ export class InteractionManager {
                     target.addChild(draggingNode);
 
                     // 3. 根据新的父节点计算新的局部坐标，保持世界位置不变
-                    const invertParent = mat3.create();
+                    const invertParent = this._tempMat3a;
                     mat3.invert(invertParent, target.getWorldMatrix());
-                    const newLocal = vec2.create();
+                    const newLocal = this._tempVec2b;
                     vec2.transformMat3(newLocal, worldPos, invertParent);
 
                     // 使用 setTransform 减少失效调用

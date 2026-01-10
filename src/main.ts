@@ -47,8 +47,6 @@ const tileLayer = new TileLayer(256, (x, y, z) => {
     // offset = 2048 * 2^(z - 12)
     const offset = Math.floor(2048 * Math.pow(2, z - 12));
 
-    // Check if tile coords are valid for this zoom level (0 to 2^z - 1)
-    const maxTile = Math.pow(2, z);
     const tileX = offset + x;
     const tileY = offset + y;
 
@@ -104,13 +102,13 @@ function loadBatch() {
         for (let j = 0; j < totalCols; j++) {
             const container = new Container(engine.renderer.gl);
             container.name = "MyContainer";
-            container.transform.setPosition(300 * i, 300 * j);
+            container.transform.setPosition(400 * i, 400 * j);
             container.interactive = true;
             // container.width = 400;
             // container.height = 400;
             container.set(container.x, container.y, 400, 400);
 
-            container.color = new Float32Array([0.8, 0.8, 1.0, 0.5]);
+            container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
             // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
             engine.scene.addChild(container, true);
 
@@ -121,7 +119,7 @@ function loadBatch() {
             // sprite1.height = 100;
             sprite1.set(sprite1.x, sprite1.y, 100, 100);
             sprite1.interactive = true;
-            sprite1.name = "Sprite1";
+            sprite1.name = "Sprite"+i+"_"+j;
             container.addChild(sprite1, true);
 
             const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
@@ -131,24 +129,22 @@ function loadBatch() {
             sprite2.set(sprite2.x, sprite2.y, 100, 100);
 
             sprite2.interactive = true;
-            sprite2.name = "Sprite2";
+            sprite2.name = "Sprite"+i+"_"+j;    
             container.addChild(sprite2, true);
 
             // 4. Add Text (Canvas2D)
-            const text = new Text("Hello WebGL + Canvas!");
+            const text = new Text("HelloText "+i+"_"+j);
             text.transform.setPosition(50, 200);
             text.fontSize = 30;
             text.fillStyle = "red";
             text.interactive = true;
-            text.name = "HelloText";
+            text.name = "HelloText"+i+"_"+j;
             container.addChild(text, true);
         }
     }
 
     currentRow = endRow;
 
-    // 更新进度
-    const progress = Math.floor((currentRow / totalRows) * 100);
     // loadingText.text = `Loading Scene... ${progress}%`;
     // 手动触发布局更新和重绘
     // loadingText.width = 0; // 强制重新测量
@@ -263,21 +259,9 @@ document.body.appendChild(statsContainer);
 
 let lastUpdateTime = 0;
 let totalNodes = 0;
-let frames = 0;
-let fps = 0;
-let lastFpsTime = performance.now();
 
 function updateStats(time: number) {
-    // 每一帧都增加帧计数，用于计算准确的 FPS
-    frames++;
-    const now = performance.now();
-    if (now > lastFpsTime + 1000) {
-        fps = Math.round((frames * 1000) / (now - lastFpsTime));
-        lastFpsTime = now;
-        frames = 0;
-    }
-
-    // 每 200ms 更新一次 UI，而不是每帧 (16ms)
+    // 每 300ms 更新一次 UI，而不是每帧 (16ms)
     if (time - lastUpdateTime < 300) {
         requestAnimationFrame(updateStats);
         return;
@@ -285,6 +269,7 @@ function updateStats(time: number) {
     lastUpdateTime = time;
 
     const glStats = engine.renderer.stats;
+    const smooth = glStats.smoothTimes;
     const scene = engine.scene;
     const memTracker = MemoryTracker.getInstance();
     const memStats = memTracker.getStats();
@@ -297,7 +282,7 @@ function updateStats(time: number) {
 
     statsContainer.innerHTML = `
         <div style="font-weight: bold; color: #fff; margin-bottom: 5px;">Performance Monitor</div>
-        FPS: ${fps}<br>
+        FPS: ${glStats.lastFPS}<br>
         Total Nodes: ${totalNodes}<br>
         Draw Calls: ${glStats.drawCalls}<br>
         Quads: ${glStats.quadCount}<br>
@@ -310,15 +295,12 @@ function updateStats(time: number) {
         CPU Array: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU TypedArray'] || 0)}<br>
         <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
         <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
-        Transform: ${glStats.times.transform.toFixed(2)}<br>
-        WebGL Render: ${glStats.times.renderWebGL.toFixed(2)}<br>
-        Flush (GPU): ${glStats.times.flush.toFixed(2)}<br>
-        Canvas 2D: ${glStats.times.canvas2D.toFixed(2)}<br>
-        Logic: ${glStats.times.logic.toFixed(2)}<br>
-        Hit Test: ${glStats.times.hitTest.toFixed(2)}<br>
-        Box Select: ${glStats.times.boxSelect.toFixed(2)}<br>
-        Interaction to Render: ${glStats.times.interactionToRender.toFixed(2)}<br>
-        <div style="color: #ffff00; margin-top: 2px;">Total: ${glStats.times.total.toFixed(2)}</div>
+        WebGL Render: ${smooth.renderWebGL.toFixed(2)}<br>
+        Flush (GPU): ${smooth.flush.toFixed(2)}<br>
+        Canvas 2D: ${smooth.canvas2D.toFixed(2)}<br>
+        Logic: ${smooth.logic.toFixed(2)}<br>
+        Interaction to Render: ${smooth.interactionToRender.toFixed(2)}<br>
+        <div style="color: #ffff00; margin-top: 2px;">Total: ${smooth.total.toFixed(2)}</div>
     `;
     requestAnimationFrame(updateStats);
 }

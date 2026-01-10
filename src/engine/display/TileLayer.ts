@@ -31,15 +31,18 @@ export class TileLayer extends Node {
     // 缓存 GL 上下文，用于销毁
     private _gl: WebGL2RenderingContext | null = null;
 
+    // --- 预分配临时变量 (GC 优化) ---
+    private static _tempVec2a = vec2.create();
+    private static _tempVec2b = vec2.create();
+    private static _tempMat3a = mat3.create();
+    private static _tempMat3b = mat3.create();
+    private static _tempCorners = [vec2.create(), vec2.create(), vec2.create(), vec2.create()];
+    private static _visibleKeys = new Set<string>();
+
     // --- 共享渲染数据 (GC 优化) ---
     private static sharedColor: Float32Array = (() => {
         const arr = new Float32Array([1, 1, 1, 1]);
         MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'TileLayer_sharedColor', arr.byteLength, 'TileLayer Shared Color');
-        return arr;
-    })();
-    private static sharedVertices: Float32Array = (() => {
-        const arr = new Float32Array(8);
-        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'TileLayer_sharedVertices', arr.byteLength, 'TileLayer Shared Vertices');
         return arr;
     })();
     private static sharedUVs: Float32Array = (() => {
@@ -64,25 +67,17 @@ export class TileLayer extends Node {
         this.tileSourceProvider = tileSourceProvider;
         this.baseZoom = baseZoom;
 
-        // 设置一个巨大的包围盒，确保 TileLayer 始终在空间索引中可见
-        // 这样渲染器才能在空间查询时检索到它
-        // this.width = 20000000; // 2千万像素，足够覆盖常规应用场景
-        // this.height = 20000000;
-        // 偏移中心，使其覆盖更大的范围
-        // this.x = -10000000;
-        // this.y = -10000000;
-        // this.setPosition(-10000000, -10000000);
         this.set(-10000000, -10000000, 20000000, 20000000);
     }
 
-    renderWebGL(renderer: Renderer, cullingRect?: Rect) {
+    renderWebGL(renderer: IRenderer, cullingRect?: Rect) {
         // 计算全局缩放系数以确定 LOD (Level of Detail)
         // 现在需要结合视图矩阵 (Camera) 计算
         const viewMatrix = renderer.getViewMatrix();
         const wm = this.getWorldMatrix();
 
         // 综合矩阵: view * world
-        const combinedMatrix = mat3.create();
+        const combinedMatrix = TileLayer._tempMat3a;
         mat3.multiply(combinedMatrix, viewMatrix, wm);
 
         // 从综合矩阵计算缩放分量
@@ -102,21 +97,20 @@ export class TileLayer extends Node {
         const sw = cullingRect ? cullingRect.width : renderer.gl.canvas.width;
         const sh = cullingRect ? cullingRect.height : renderer.gl.canvas.height;
 
-        const screenCorners = [
-            vec2.fromValues(sx, sy),
-            vec2.fromValues(sx + sw, sy),
-            vec2.fromValues(sx + sw, sy + sh),
-            vec2.fromValues(sx, sy + sh)
-        ];
+        const corners = TileLayer._tempCorners;
+        vec2.set(corners[0], sx, sy);
+        vec2.set(corners[1], sx + sw, sy);
+        vec2.set(corners[2], sx + sw, sy + sh);
+        vec2.set(corners[3], sx, sy + sh);
 
         // 逆转综合矩阵，将屏幕空间坐标直接映射到 TileLayer 的局部空间
-        const invertMatrix = mat3.create();
-        mat3.invert(invertMatrix, combinedMatrix);
+        const invertMatrix = TileLayer._tempMat3b;
+        if (!mat3.invert(invertMatrix, combinedMatrix)) return;
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-        for (const p of screenCorners) {
-            const local = vec2.create();
+        const local = TileLayer._tempVec2a;
+        for (const p of corners) {
             vec2.transformMat3(local, p, invertMatrix);
             minX = Math.min(minX, local[0]);
             minY = Math.min(minY, local[1]);
@@ -133,7 +127,8 @@ export class TileLayer extends Node {
         // 3. 渲染瓦片
         const gl = renderer.gl;
         this._gl = gl; // 缓存 GL 上下文
-        const visibleKeys = new Set<string>();
+        const visibleKeys = TileLayer._visibleKeys;
+        visibleKeys.clear();
 
         // 范围限制安全检查 (现在不太可能触发)
         if ((endX - startX) * (endY - startY) > 2500) {
@@ -256,33 +251,23 @@ export class TileLayer extends Node {
                 const m10 = wm[3], m11 = wm[4];
                 const m20 = wm[6], m21 = wm[7];
 
-                const v = TileLayer.sharedVertices;
-
-                // TL (posX, posY)
-                v[0] = posX * m00 + posY * m10 + m20;
-                v[1] = posX * m01 + posY * m11 + m21;
-
-                // TR (posX + w, posY)
-                v[2] = (posX + w) * m00 + posY * m10 + m20;
-                v[3] = (posX + w) * m01 + posY * m11 + m21;
-
-                // BR (posX + w, posY + h)
-                v[4] = (posX + w) * m00 + (posY + h) * m10 + m20;
-                v[5] = (posX + w) * m01 + (posY + h) * m11 + m21;
-
-                // BL (posX, posY + h)
-                v[6] = posX * m00 + (posY + h) * m10 + m20;
-                v[7] = posX * m01 + (posY + h) * m11 + m21;
-
                 // 使用批处理渲染
-                renderer.drawQuad(
+                renderer.drawQuadFast(
                     texture,
-                    TileLayer.sharedVertices,
+                    posX * m00 + posY * m10 + m20,
+                    posX * m01 + posY * m11 + m21,
+                    (posX + w) * m00 + posY * m10 + m20,
+                    (posX + w) * m01 + posY * m11 + m21,
+                    (posX + w) * m00 + (posY + h) * m10 + m20,
+                    (posX + w) * m01 + (posY + h) * m11 + m21,
+                    posX * m00 + (posY + h) * m10 + m20,
+                    posX * m01 + (posY + h) * m11 + m21,
                     TileLayer.sharedUVs,
                     TileLayer.sharedColor
                 );
             }
         }
+
 
         // 4. 取消不可见区域的正在加载任务
         for (const [key, controller] of this.loading) {

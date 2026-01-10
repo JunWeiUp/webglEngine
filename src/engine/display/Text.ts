@@ -1,5 +1,6 @@
 import { Node } from './Node';
 import { Renderer } from '../core/Renderer';
+import type { IRenderer } from '../core/IRenderer';
 import { Texture } from '../core/Texture';
 import { AtlasManager } from '../utils/AtlasManager';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
@@ -133,7 +134,7 @@ export class Text extends Node {
     // 缓存颜色数组，避免 GC
     private static _sharedColor = new Float32Array([1, 1, 1, 1]);
 
-    renderWebGL(renderer: any) {
+    renderWebGL(renderer: IRenderer) {
         this.updateTexture(renderer as Renderer);
 
         if (!this._texture || !this._texture.baseTexture) return; // 确保 texture 和 baseTexture 都存在
@@ -161,7 +162,7 @@ export class Text extends Node {
         const x3 = m10 * h + m20;
         const y3 = m11 * h + m21;
 
-        (renderer as Renderer).drawQuadFast(
+        renderer.drawQuadFast(
             this._texture.baseTexture,
             x0, y0,
             x1, y1,
