@@ -1,8 +1,9 @@
 import { Node } from '../scene/Node';
+import { Text } from '../scene/Text';
 import { Renderer } from '../rendering/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
 import { AuxiliaryLayer } from './AuxiliaryLayer';
-import type { Guide, Handle } from './AuxiliaryLayer';
+import type { Guide, Handle, AlignmentEdge } from './AuxiliaryLayer';
 import type { Rect } from '../math/Rect';
 import type { Engine } from '../system/Engine';
 import { TransformCommand, CreateCommand, DeleteCommand } from '../history/Command';
@@ -51,6 +52,7 @@ export class InteractionManager {
     // 性能优化：预分配对象以减少 GC
     private _tempVec2a = vec2.create();
     private _tempVec2b = vec2.create();
+    private _tempVec2c = vec2.create();
     private _tempMat3a = mat3.create();
     private _tempMat3b = mat3.create();
 
@@ -113,6 +115,24 @@ export class InteractionManager {
     }
 
     /**
+     * 将世界坐标转换为屏幕坐标
+     */
+    public worldToScreen(worldX: number, worldY: number): vec2 {
+        const x = (worldX * this.cameraScale) + this.cameraX;
+        const y = (worldY * this.cameraScale) + this.cameraY;
+        return vec2.fromValues(x, y);
+    }
+
+    /**
+     * 将屏幕坐标转换为世界坐标
+     */
+    public screenToWorld(screenX: number, screenY: number): vec2 {
+        const x = (screenX - this.cameraX) / this.cameraScale;
+        const y = (screenY - this.cameraY) / this.cameraScale;
+        return vec2.fromValues(x, y);
+    }
+
+    /**
      * 初始化 DOM 事件监听器
      */
     private initListeners() {
@@ -124,14 +144,16 @@ export class InteractionManager {
             mousemove: this.onMouseMove.bind(this),
             mouseup: this.onMouseUp.bind(this),
             wheel: this.onWheel.bind(this),
-            keydown: this.onKeyDown.bind(this)
+            keydown: this.onKeyDown.bind(this),
+            dblclick: this.onDblClick.bind(this)
         };
 
         canvas.addEventListener('mousedown', this._handlers.mousedown);
-        canvas.addEventListener('mousemove', this._handlers.mousemove);
-        canvas.addEventListener('mouseup', this._handlers.mouseup);
+        window.addEventListener('mousemove', this._handlers.mousemove);
+        window.addEventListener('mouseup', this._handlers.mouseup);
         canvas.addEventListener('wheel', this._handlers.wheel as any, { passive: false });
         window.addEventListener('keydown', this._handlers.keydown);
+        canvas.addEventListener('dblclick', this._handlers.dblclick);
 
         // Ruler events
         this.engine.ruler.horizontalCanvas.addEventListener('mousedown', (e: MouseEvent) => this.onRulerMouseDown(e, 'h'));
@@ -144,15 +166,29 @@ export class InteractionManager {
     public dispose() {
         const canvas = this.renderer.ctx.canvas;
         canvas.removeEventListener('mousedown', this._handlers.mousedown);
-        canvas.removeEventListener('mousemove', this._handlers.mousemove);
-        canvas.removeEventListener('mouseup', this._handlers.mouseup);
+        window.removeEventListener('mousemove', this._handlers.mousemove);
+        window.removeEventListener('mouseup', this._handlers.mouseup);
         canvas.removeEventListener('wheel', this._handlers.wheel);
         window.removeEventListener('keydown', this._handlers.keydown);
+        canvas.removeEventListener('dblclick', this._handlers.dblclick);
 
         this._handlers = {};
         this.onStructureChange = null;
         this.onSelectionChange = null;
         this.onHoverChange = null;
+    }
+
+    /**
+     * 鼠标双击事件处理
+     */
+    private onDblClick(e: MouseEvent) {
+        const pos = this.getMousePos(e, this._tempVec2a);
+        const worldPos = this.getWorldMousePos(pos, this._tempVec2b);
+
+        const hit = this.hitTest(this.scene, worldPos);
+        if (hit instanceof Text) {
+            this.engine.textEditor.startEdit(hit);
+        }
     }
 
     private onRulerMouseDown(e: MouseEvent, type: 'h' | 'v') {
@@ -480,12 +516,98 @@ export class InteractionManager {
         }
     }
 
+    private getSnapTargets(node: Node, localX: number, localY: number, localWidth: number, localHeight: number): { xTargets: { value: number, worldValue: number }[], yTargets: { value: number, worldValue: number }[] } {
+        const parent = node.parent;
+        if (!parent) return { xTargets: [], yTargets: [] };
+
+        const scale = this.cameraScale;
+        const worldThreshold = 5 / scale;
+        const pWM = parent.getWorldMatrix();
+        const pWMInv = mat3.invert(this._tempMat3a, pWM);
+        if (!pWMInv) return { xTargets: [], yTargets: [] };
+
+        const xTargets: { value: number, worldValue: number }[] = [];
+        const yTargets: { value: number, worldValue: number }[] = [];
+
+        // 1. Collect targets from siblings
+        let xSiblings: Node[] = [];
+        let ySiblings: Node[] = [];
+
+        if (parent.childSpatialIndex) {
+            // For X-alignment: Search a narrow vertical strip that covers the full height of the parent
+            const xQuery: Rect = {
+                x: localX - worldThreshold, // Using worldThreshold as a safe local margin
+                y: -1000000, // Large enough to cover parent height
+                width: localWidth + worldThreshold * 2,
+                height: 2000000
+            };
+            xSiblings = parent.childSpatialIndex.search(xQuery).filter(c => c !== node && c.interactive && c.visible);
+
+            // For Y-alignment: Search a narrow horizontal strip that covers the full width of the parent
+            const yQuery: Rect = {
+                x: -1000000,
+                y: localY - worldThreshold,
+                width: 2000000,
+                height: localHeight + worldThreshold * 2
+            };
+            ySiblings = parent.childSpatialIndex.search(yQuery).filter(c => c !== node && c.interactive && c.visible);
+        } else {
+            xSiblings = ySiblings = parent.children.filter(c => c !== node && c.interactive && c.visible);
+        }
+
+        // Process X targets
+        for (const sibling of xSiblings) {
+            const sWM = sibling.getWorldMatrix();
+            [0, sibling.width / 2, sibling.width].forEach(lx => {
+                const worldPos = vec2.transformMat3(this._tempVec2a, vec2.set(this._tempVec2b, lx, 0), sWM);
+                const localPos = vec2.transformMat3(this._tempVec2c, worldPos, pWMInv);
+                xTargets.push({ value: localPos[0], worldValue: worldPos[0] });
+            });
+        }
+
+        // Process Y targets
+        for (const sibling of ySiblings) {
+            const sWM = sibling.getWorldMatrix();
+            [0, sibling.height / 2, sibling.height].forEach(ly => {
+                const worldPos = vec2.transformMat3(this._tempVec2a, vec2.set(this._tempVec2b, 0, ly), sWM);
+                const localPos = vec2.transformMat3(this._tempVec2c, worldPos, pWMInv);
+                yTargets.push({ value: localPos[1], worldValue: worldPos[1] });
+            });
+        }
+
+        // 2. Add parent boundaries as targets
+        [0, parent.width / 2, parent.width].forEach(lx => {
+            const worldPos = vec2.transformMat3(this._tempVec2a, vec2.set(this._tempVec2b, lx, 0), pWM);
+            const localPos = vec2.transformMat3(this._tempVec2c, worldPos, pWMInv);
+            xTargets.push({ value: localPos[0], worldValue: worldPos[0] });
+        });
+        [0, parent.height / 2, parent.height].forEach(ly => {
+            const worldPos = vec2.transformMat3(this._tempVec2a, vec2.set(this._tempVec2b, 0, ly), pWM);
+            const localPos = vec2.transformMat3(this._tempVec2c, worldPos, pWMInv);
+            yTargets.push({ value: localPos[1], worldValue: worldPos[1] });
+        });
+
+        // 3. Add Guides as targets
+        for (const guide of this.auxLayer.guides) {
+            if (guide.type === 'v') {
+                const worldPos = vec2.set(this._tempVec2a, guide.value, 0);
+                const localPos = vec2.transformMat3(this._tempVec2b, worldPos, pWMInv);
+                xTargets.push({ value: localPos[0], worldValue: guide.value });
+            } else {
+                const worldPos = vec2.set(this._tempVec2a, 0, guide.value);
+                const localPos = vec2.transformMat3(this._tempVec2b, worldPos, pWMInv);
+                yTargets.push({ value: localPos[1], worldValue: guide.value });
+            }
+        }
+
+        return { xTargets, yTargets };
+    }
+
     /**
      * 吸附逻辑
      * @param node 当前操作的节点
-     * @param targetWorldX 目标世界坐标 X
-     * @param targetWorldY 目标世界坐标 Y
-     * @param threshold 像素阈值 (屏幕空间)
+     * @param targetX 目标世界坐标 X
+     * @param targetY 目标世界坐标 Y
      */
     private snapNode(node: Node, targetX: number, targetY: number): { x: number, y: number } {
         const parent = node.parent;
@@ -493,8 +615,7 @@ export class InteractionManager {
 
         const scale = this.cameraScale;
         const worldThreshold = 5 / scale;
-        
-        // Calculate parent's global scale to convert world threshold to local threshold
+
         const parentWorldMatrix = parent.getWorldMatrix();
         const parentScaleX = Math.hypot(parentWorldMatrix[0], parentWorldMatrix[1]);
         const parentScaleY = Math.hypot(parentWorldMatrix[3], parentWorldMatrix[4]);
@@ -503,115 +624,76 @@ export class InteractionManager {
 
         this.auxLayer.alignmentLines = [];
 
-        // Candidates for snapping
-        const xTargets: { value: number, worldX: number }[] = [];
-        const yTargets: { value: number, worldY: number }[] = [];
-
-        // --- 性能优化：使用空间索引查询附近的兄弟节点 ---
-        let siblings: Node[];
-        if (parent.childSpatialIndex) {
-            // 查询范围：当前节点目标位置附近的 AABB
-            // 注意：这里假设父节点的缩放为 1，如果父节点有缩放，threshold 可能需要进一步换算
-            const queryRect: Rect = {
-                x: targetX - worldThreshold,
-                y: targetY - worldThreshold,
-                width: node.width + worldThreshold * 2,
-                height: node.height + worldThreshold * 2
-            };
-            siblings = parent.childSpatialIndex.search(queryRect).filter(c => c !== node && c.interactive);
-        } else {
-            // 降级方案：全量过滤 (百万级节点下会卡顿)
-            siblings = parent.children.filter(c => c !== node && c.interactive);
-        }
-
-        // 1. Add siblings as targets
-        for (const sibling of siblings) {
-            const sXLines = [sibling.x, sibling.x + sibling.width / 2, sibling.x + sibling.width];
-            const sYLines = [sibling.y, sibling.y + sibling.height / 2, sibling.y + sibling.height];
-
-            const siblingMatrix = sibling.getWorldMatrix();
-            sXLines.forEach((lx, i) => {
-                const worldPos = this._tempVec2a;
-                vec2.set(worldPos, i * sibling.width / 2, 0);
-                vec2.transformMat3(worldPos, worldPos, siblingMatrix);
-                xTargets.push({ value: lx, worldX: worldPos[0] });
-            });
-            sYLines.forEach((ly, i) => {
-                const worldPos = this._tempVec2a;
-                vec2.set(worldPos, 0, i * sibling.height / 2);
-                vec2.transformMat3(worldPos, worldPos, siblingMatrix);
-                yTargets.push({ value: ly, worldY: worldPos[1] });
-            });
-        }
-
-        // 2. Add parent boundaries as targets (0, center, size)
-        const pXLines = [0, parent.width / 2, parent.width];
-        const pYLines = [0, parent.height / 2, parent.height];
-        const parentMatrix = parent.getWorldMatrix();
-        pXLines.forEach((lx, i) => {
-            const localPos = this._tempVec2a;
-            vec2.set(localPos, i * parent.width / 2, 0);
-            const worldPos = this._tempVec2b;
-            vec2.transformMat3(worldPos, localPos, parentMatrix);
-            xTargets.push({ value: lx, worldX: worldPos[0] });
-        });
-        pYLines.forEach((ly, i) => {
-            const localPos = this._tempVec2a;
-            vec2.set(localPos, 0, i * parent.height / 2);
-            const worldPos = this._tempVec2b;
-            vec2.transformMat3(worldPos, localPos, parentMatrix);
-            yTargets.push({ value: ly, worldY: worldPos[1] });
-        });
-
-        // 3. Add Guides as targets
-        const parentWorldMatrixInv = this._tempMat3a;
-        mat3.invert(parentWorldMatrixInv, parent.getWorldMatrix());
-
-        for (const guide of this.auxLayer.guides) {
-            if (guide.type === 'v') {
-                // Convert world guide value to parent's local space
-                const worldPos = this._tempVec2a;
-                vec2.set(worldPos, guide.value, 0);
-                const localPos = this._tempVec2b;
-                vec2.transformMat3(localPos, worldPos, parentWorldMatrixInv);
-                xTargets.push({ value: localPos[0], worldX: guide.value });
-            } else {
-                const worldPos = this._tempVec2a;
-                vec2.set(worldPos, 0, guide.value);
-                const localPos = this._tempVec2b;
-                vec2.transformMat3(localPos, worldPos, parentWorldMatrixInv);
-                yTargets.push({ value: localPos[1], worldY: guide.value });
-            }
-        }
+        // 1. Get targets
+        const { xTargets, yTargets } = this.getSnapTargets(node, targetX, targetY, node.width, node.height);
 
         let snappedX = targetX;
         let snappedY = targetY;
 
+        // Current node's potential alignment lines (Left, Center, Right)
         const myXLines = [targetX, targetX + node.width / 2, targetX + node.width];
         const myYLines = [targetY, targetY + node.height / 2, targetY + node.height];
 
-        // Snap X
-        let minDX = localThresholdX;
+        // Find best snap for X
+        let bestDX = localThresholdX;
+        let bestSnapX = targetX;
         for (let i = 0; i < 3; i++) {
             for (const target of xTargets) {
                 const dx = Math.abs(myXLines[i] - target.value);
-                if (dx < minDX) {
-                    minDX = dx;
-                    snappedX = target.value - (i * node.width / 2);
-                    this.auxLayer.alignmentLines.push({ type: 'v', value: target.worldX });
+                if (dx < bestDX) {
+                    bestDX = dx;
+                    bestSnapX = target.value - (i * node.width / 2);
+                }
+            }
+        }
+        snappedX = bestSnapX;
+
+        // Find best snap for Y
+        let bestDY = localThresholdY;
+        let bestSnapY = targetY;
+        for (let i = 0; i < 3; i++) {
+            for (const target of yTargets) {
+                const dy = Math.abs(myYLines[i] - target.value);
+                if (dy < bestDY) {
+                    bestDY = dy;
+                    bestSnapY = target.value - (i * node.height / 2);
+                }
+            }
+        }
+        snappedY = bestSnapY;
+
+        // Now that we have the snapped position, show ALL alignment lines that match
+        const snappedMyXLines = [snappedX, snappedX + node.width / 2, snappedX + node.width];
+        const snappedMyYLines = [snappedY, snappedY + node.height / 2, snappedY + node.height];
+        const xEdges: AlignmentEdge[] = ['left', 'centerX', 'right'];
+        const yEdges: AlignmentEdge[] = ['top', 'centerY', 'bottom'];
+        const epsilon = 0.0001; // Tiny epsilon for float comparison after snapping
+
+        for (let i = 0; i < 3; i++) {
+            for (const target of xTargets) {
+                if (Math.abs(snappedMyXLines[i] - target.value) < epsilon) {
+                    // Check if we already added this world coordinate to avoid duplicates
+                    if (!this.auxLayer.alignmentLines.some(l => l.type === 'v' && Math.abs(l.value - target.worldValue) < epsilon && l.edge === xEdges[i])) {
+                        this.auxLayer.alignmentLines.push({ 
+                            type: 'v', 
+                            value: target.worldValue,
+                            edge: xEdges[i]
+                        });
+                    }
                 }
             }
         }
 
-        // Snap Y
-        let minDY = localThresholdY;
         for (let i = 0; i < 3; i++) {
             for (const target of yTargets) {
-                const dy = Math.abs(myYLines[i] - target.value);
-                if (dy < minDY) {
-                    minDY = dy;
-                    snappedY = target.value - (i * node.height / 2);
-                    this.auxLayer.alignmentLines.push({ type: 'h', value: target.worldY });
+                if (Math.abs(snappedMyYLines[i] - target.value) < epsilon) {
+                    if (!this.auxLayer.alignmentLines.some(l => l.type === 'h' && Math.abs(l.value - target.worldValue) < epsilon && l.edge === yEdges[i])) {
+                        this.auxLayer.alignmentLines.push({ 
+                            type: 'h', 
+                            value: target.worldValue,
+                            edge: yEdges[i]
+                        });
+                    }
                 }
             }
         }
@@ -1169,80 +1251,94 @@ export class InteractionManager {
             if (parentNode) {
                 const scale = this.cameraScale;
                 const worldThreshold = 5 / scale;
-                const parentWM = parentNode.transform.worldMatrix;
 
-                // --- 性能优化：使用空间索引查询附近的兄弟节点 ---
-                let siblings: Node[];
-                if (parentNode.childSpatialIndex) {
-                    const queryRect: Rect = {
-                        x: newX - worldThreshold,
-                        y: newY - worldThreshold,
-                        width: newW + worldThreshold * 2,
-                        height: newH + worldThreshold * 2
-                    };
-                    siblings = parentNode.childSpatialIndex.search(queryRect).filter((c: Node) => c !== node && c.interactive);
-                } else {
-                    siblings = parentNode.children.filter((c: Node) => c !== node && c.interactive);
-                }
+                const { xTargets, yTargets } = this.getSnapTargets(node, newX, newY, newW, newH);
 
                 // Vertical snapping (for X changes)
                 if (handleType.includes('e') || handleType.includes('w')) {
-                    // Calculate current world X of the handle
+                    // Calculate current world X of the active handle edge
                     const localX = handleType.includes('e') ? newX + newW : newX;
+                    const parentWM = parentNode.getWorldMatrix();
                     const worldXLine = localX * parentWM[0] + parentWM[6];
 
-                    let foundX = false;
-                    for (const sibling of siblings) {
-                        const sBounds = sibling.getBounds(false);
-                        if (!sBounds) continue;
+                    let bestDX = worldThreshold;
+                    let bestSnapWorldX = worldXLine;
 
-                        const sXLines: number[] = [sBounds.x, sBounds.x + sBounds.width / 2, sBounds.x + sBounds.width];
-                        for (let j = 0; j < 3; j++) {
-                            if (Math.abs(worldXLine - sXLines[j]) < worldThreshold) {
-                                const deltaWorld = sXLines[j] - worldXLine;
-                                const deltaLocal = deltaWorld / parentWM[0];
-                                if (handleType.includes('e')) {
-                                    newW += deltaLocal;
-                                } else {
-                                    newX += deltaLocal;
-                                    newW -= deltaLocal;
-                                }
-                                this.auxLayer.alignmentLines.push({ type: 'v', value: sXLines[j] });
-                                foundX = true;
-                                break;
-                            }
+                    for (const target of xTargets) {
+                        const dx = Math.abs(worldXLine - target.worldValue);
+                        if (dx < bestDX) {
+                            bestDX = dx;
+                            bestSnapWorldX = target.worldValue;
                         }
-                        if (foundX) break;
+                    }
+
+                    if (bestDX < worldThreshold) {
+                        const deltaWorld = bestSnapWorldX - worldXLine;
+                        const deltaLocal = deltaWorld / parentWM[0];
+                        if (handleType.includes('e')) {
+                            newW += deltaLocal;
+                        } else {
+                            newX += deltaLocal;
+                            newW -= deltaLocal;
+                        }
                     }
                 }
 
                 // Horizontal snapping (for Y changes)
                 if (handleType.includes('s') || handleType.includes('n')) {
                     const localY = handleType.includes('s') ? newY + newH : newY;
+                    const parentWM = parentNode.getWorldMatrix();
                     const worldYLine = localY * parentWM[4] + parentWM[7];
 
-                    let foundY = false;
-                    for (const sibling of siblings) {
-                        const sBounds = sibling.getBounds(false);
-                        if (!sBounds) continue;
+                    let bestDY = worldThreshold;
+                    let bestSnapWorldY = worldYLine;
 
-                        const sYLines: number[] = [sBounds.y, sBounds.y + sBounds.height / 2, sBounds.y + sBounds.height];
-                        for (let j = 0; j < 3; j++) {
-                            if (Math.abs(worldYLine - sYLines[j]) < worldThreshold) {
-                                const deltaWorld = sYLines[j] - worldYLine;
-                                const deltaLocal = deltaWorld / parentWM[4];
-                                if (handleType.includes('s')) {
-                                    newH += deltaLocal;
-                                } else {
-                                    newY += deltaLocal;
-                                    newH -= deltaLocal;
-                                }
-                                this.auxLayer.alignmentLines.push({ type: 'h', value: sYLines[j] });
-                                foundY = true;
-                                break;
+                    for (const target of yTargets) {
+                        const dy = Math.abs(worldYLine - target.worldValue);
+                        if (dy < bestDY) {
+                            bestDY = dy;
+                            bestSnapWorldY = target.worldValue;
+                        }
+                    }
+
+                    if (bestDY < worldThreshold) {
+                        const deltaWorld = bestSnapWorldY - worldYLine;
+                        const deltaLocal = deltaWorld / parentWM[4];
+                        if (handleType.includes('s')) {
+                            newH += deltaLocal;
+                        } else {
+                            newY += deltaLocal;
+                            newH -= deltaLocal;
+                        }
+                    }
+                }
+
+                // After snapping the active edge, check ALL 6 edges for alignment lines
+                const snappedMyXLines = [newX, newX + newW / 2, newX + newW];
+                const snappedMyYLines = [newY, newY + newH / 2, newY + newH];
+                const xEdges: AlignmentEdge[] = ['left', 'centerX', 'right'];
+                const yEdges: AlignmentEdge[] = ['top', 'centerY', 'bottom'];
+                const epsilon = 0.0001;
+                const parentWM = parentNode.getWorldMatrix();
+
+                for (let i = 0; i < 3; i++) {
+                    const worldX = snappedMyXLines[i] * parentWM[0] + parentWM[6];
+                    for (const target of xTargets) {
+                        if (Math.abs(worldX - target.worldValue) < epsilon) {
+                            if (!this.auxLayer.alignmentLines.some(l => l.type === 'v' && Math.abs(l.value - target.worldValue) < epsilon && l.edge === xEdges[i])) {
+                                this.auxLayer.alignmentLines.push({ type: 'v', value: target.worldValue, edge: xEdges[i] });
                             }
                         }
-                        if (foundY) break;
+                    }
+                }
+                for (let i = 0; i < 3; i++) {
+                    const worldY = snappedMyYLines[i] * parentWM[4] + parentWM[7];
+                    for (const target of yTargets) {
+                        if (Math.abs(worldY - target.worldValue) < epsilon) {
+                            if (!this.auxLayer.alignmentLines.some(l => l.type === 'h' && Math.abs(l.value - target.worldValue) < epsilon && l.edge === yEdges[i])) {
+                                this.auxLayer.alignmentLines.push({ type: 'h', value: target.worldValue, edge: yEdges[i] });
+                            }
+                        }
                     }
                 }
             }
@@ -1361,7 +1457,21 @@ export class InteractionManager {
             }
 
             let target: Node | null = hit;
-            if (!target && draggingNode.parent !== this.scene) {
+            if (target) {
+                // Find nearest container or root
+                let curr: Node | null = target;
+                while (curr && curr !== this.scene) {
+                    if (curr.constructor.name === 'Container') {
+                        target = curr;
+                        break;
+                    }
+                    curr = curr.parent;
+                }
+                // If we didn't find a Container, the target becomes the scene root
+                if (!curr || (curr === this.scene && target.constructor.name !== 'Container')) {
+                    target = this.scene;
+                }
+            } else if (draggingNode.parent !== this.scene) {
                 target = this.scene;
             }
 

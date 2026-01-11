@@ -1,6 +1,9 @@
 import { Node } from '../scene/Node';
 import { PropertyCommand } from '../history/Command';
 import type { Engine } from '../system/Engine';
+import { HighlightPicker } from './HighlightPicker';
+import { Text } from '../scene/Text';
+import { FontManager } from '../system/FontManager';
 
 /**
  * 属性面板 (Property Panel)
@@ -493,6 +496,46 @@ export class PropertyPanel {
             { label: 'SY', key: 'scaleY' }
         ]);
         this.container.appendChild(transformSection);
+
+        // Text Section (hidden by default)
+        const textSection = this.createSection('Text');
+        textSection.id = 'text-section';
+        textSection.style.display = 'none';
+        
+        // Content
+        const contentField = this.addPropertyField(textSection, 'Content', 'textContent', 'text');
+        if (contentField) contentField.style.gridColumn = '1 / -1';
+        
+        // Font Family & Size
+        this.addFontFamilyField(textSection, 'Font', 'fontFamily');
+        this.addPropertyFieldWithSlider(textSection, 'Size', 'fontSize', 8, 200);
+        
+        // Weight & Style
+        this.addSelectField(textSection, 'Weight', 'fontWeight', ['normal', 'bold', '100', '200', '300', '400', '500', '600', '700', '800', '900']);
+        this.addSelectField(textSection, 'Style', 'fontStyle', ['normal', 'italic', 'oblique']);
+        
+        // Fill & Letter Spacing
+        this.addPropertyField(textSection, 'Fill', 'textFillStyle', 'color');
+        this.addPropertyField(textSection, 'Space', 'letterSpacing', 'number');
+
+        // Alignment
+        const alignHeader = this.createSubHeader('Alignment');
+        (textSection as any).grid.appendChild(alignHeader);
+        this.addSelectField(textSection, 'H Align', 'textAlign', ['left', 'center', 'right']);
+        this.addSelectField(textSection, 'V Align', 'textBaseline', ['top', 'middle', 'bottom']);
+        
+        // Stroke
+        const textStrokeHeader = this.createSubHeader('Text Stroke');
+        (textSection as any).grid.appendChild(textStrokeHeader);
+        this.addPropertyField(textSection, 'Color', 'textStrokeStyle', 'color');
+        this.addPropertyField(textSection, 'Width', 'textStrokeWidth', 'number');
+
+        // Highlight
+        const highlightHeader = this.createSubHeader('Highlight');
+        (textSection as any).grid.appendChild(highlightHeader);
+        this.addHighlightPickerField(textSection, 'Style', 'highlight');
+
+        this.container.appendChild(textSection);
 
         // Constraints Section
         const constraintsSection = this.createSection('Constraints');
@@ -1022,6 +1065,7 @@ export class PropertyPanel {
             let dragStartStates = new Map<Node, any>();
 
             label.addEventListener('mousedown', (e) => {
+                if (input.disabled) return;
                 const nodesToApply = Array.from(this.selectedNodes).filter(n => !n.locked);
                 if (nodesToApply.length === 0) return;
 
@@ -1283,7 +1327,299 @@ export class PropertyPanel {
         (btn as any).updateUI = updateUI;
     }
 
-    private addSelectField(parent: HTMLElement, label: string, key: string, options: string[]) {
+    private addHighlightPickerField(parent: HTMLElement, label: string, key: string): HTMLElement {
+        const container = document.createElement('div');
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.style.height = '28px';
+        container.style.position = 'relative';
+
+        const labelEl = document.createElement('div');
+        Object.assign(labelEl.style, {
+            width: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--figma-text-tertiary)',
+            fontSize: '10px',
+            fontWeight: '500',
+            flexShrink: '0',
+            cursor: 'default',
+            userSelect: 'none'
+        });
+        labelEl.innerText = label;
+        container.appendChild(labelEl);
+
+        const trigger = document.createElement('div');
+        Object.assign(trigger.style, {
+            flex: '1',
+            height: '22px',
+            backgroundColor: 'var(--figma-hover-bg)',
+            borderRadius: '2px',
+            border: '1px solid transparent',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 6px',
+            cursor: 'pointer',
+            marginLeft: '4px',
+            transition: 'background-color 0.15s, border-color 0.15s'
+        });
+
+        const previewText = document.createElement('span');
+        previewText.innerText = 'None';
+        Object.assign(previewText.style, {
+            fontSize: '11px',
+            color: 'var(--figma-text-primary)',
+            flex: '1'
+        });
+        trigger.appendChild(previewText);
+
+        const arrow = document.createElement('div');
+        arrow.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4l3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        arrow.style.color = 'var(--figma-text-tertiary)';
+        trigger.appendChild(arrow);
+
+        trigger.addEventListener('mouseenter', () => {
+            trigger.style.backgroundColor = 'var(--figma-active-bg)';
+            trigger.style.borderColor = 'var(--figma-border-light)';
+        });
+        trigger.addEventListener('mouseleave', () => {
+            trigger.style.backgroundColor = 'var(--figma-hover-bg)';
+            trigger.style.borderColor = 'transparent';
+        });
+
+        trigger.addEventListener('click', (e) => {
+            const rect = trigger.getBoundingClientRect();
+            const picker = new HighlightPicker(
+                this.engine,
+                this.selectedNodes,
+                (type, color) => {
+                    this.applyChange('highlightType', type, 'text');
+                    this.applyChange('highlightColor', color, 'text');
+                    this.syncFromNodes();
+                }
+            );
+            picker.show(rect.left, rect.top);
+        });
+
+        container.appendChild(trigger);
+        
+        // Use a hidden input for syncing if needed, or handle in syncFromNodes
+        const hiddenInput = document.createElement('input');
+        hiddenInput.type = 'hidden';
+        this.fields[key] = hiddenInput as any;
+        (hiddenInput as any).updateUI = (nodes: Node[]) => {
+            const firstNode = nodes[0] as Text;
+            const type = firstNode.highlightType || 'none';
+            const color = firstNode.highlightColor || 'transparent';
+            
+            if (type === 'none') {
+                previewText.innerText = 'None';
+            } else {
+                previewText.innerText = `${type.charAt(0).toUpperCase() + type.slice(1)}`;
+                previewText.style.color = color;
+            }
+        };
+
+        const grid = (parent as any).grid;
+        if (grid) grid.appendChild(container);
+        else parent.appendChild(container);
+
+        return container;
+    }
+
+    private addFontFamilyField(parent: HTMLElement, label: string, key: string): HTMLElement {
+        const container = document.createElement('div');
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.style.height = '28px';
+        container.style.position = 'relative';
+
+        const labelEl = document.createElement('div');
+        Object.assign(labelEl.style, {
+            width: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--figma-text-tertiary)',
+            fontSize: '10px',
+            fontWeight: '500',
+            flexShrink: '0',
+            userSelect: 'none'
+        });
+        labelEl.innerText = label;
+        container.appendChild(labelEl);
+
+        const selectWrapper = document.createElement('div');
+        selectWrapper.style.flex = '1';
+        selectWrapper.style.display = 'flex';
+        selectWrapper.style.alignItems = 'center';
+        selectWrapper.style.position = 'relative';
+        selectWrapper.style.height = '22px';
+        selectWrapper.style.marginLeft = '4px';
+        container.appendChild(selectWrapper);
+
+        const select = document.createElement('select');
+        Object.assign(select.style, {
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'transparent',
+            border: '1px solid transparent',
+            color: 'var(--figma-text-primary)',
+            fontSize: '11px',
+            padding: '0 20px 0 6px',
+            outline: 'none',
+            borderRadius: '2px',
+            cursor: 'pointer',
+            appearance: 'none',
+            transition: 'background-color 0.15s, border-color 0.15s'
+        });
+
+        const arrow = document.createElement('div');
+        arrow.innerHTML = '<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M2 3l2 2 2-2" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        Object.assign(arrow.style, {
+            position: 'absolute',
+            right: '4px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: 'var(--figma-text-tertiary)',
+            pointerEvents: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+        });
+        selectWrapper.appendChild(arrow);
+
+        // Hover effects
+        select.addEventListener('mouseenter', () => {
+            if (document.activeElement !== select) {
+                select.style.backgroundColor = 'var(--figma-hover-bg)';
+                labelEl.style.color = 'var(--figma-text-secondary)';
+                arrow.style.color = 'var(--figma-text-secondary)';
+            }
+        });
+        select.addEventListener('mouseleave', () => {
+            if (document.activeElement !== select) {
+                select.style.backgroundColor = 'transparent';
+                labelEl.style.color = 'var(--figma-text-tertiary)';
+                arrow.style.color = 'var(--figma-text-tertiary)';
+            }
+        });
+
+        const fontManager = FontManager.getInstance();
+        
+        const updateOptions = () => {
+            select.innerHTML = '';
+            
+            // Standard fonts
+            const standardGroup = document.createElement('optgroup');
+            standardGroup.label = 'Standard Fonts';
+            fontManager.standardFonts.forEach((font: any) => {
+                const option = document.createElement('option');
+                option.value = font.family;
+                option.innerText = font.name;
+                option.style.fontFamily = font.family;
+                standardGroup.appendChild(option);
+            });
+            select.appendChild(standardGroup);
+
+            // Custom fonts
+            const customFonts = fontManager.getCustomFonts();
+            if (customFonts.length > 0) {
+                const customGroup = document.createElement('optgroup');
+                customGroup.label = 'Custom Fonts';
+                customFonts.forEach((font: any) => {
+                    const option = document.createElement('option');
+                    option.value = font.family;
+                    option.innerText = font.name;
+                    option.style.fontFamily = font.family;
+                    customGroup.appendChild(option);
+                });
+                select.appendChild(customGroup);
+            }
+        };
+
+        updateOptions();
+        select.value = fontManager.getPreference();
+
+        select.addEventListener('change', () => {
+            const family = select.value;
+            this.applyChange(key, family, 'text');
+            fontManager.savePreference(family);
+        });
+
+        selectWrapper.appendChild(select);
+        this.fields[key] = select as any;
+
+        // Upload Button
+        const uploadBtn = document.createElement('div');
+        uploadBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.5 9.5V10.5C2.5 11.6046 3.39543 12.5 4.5 12.5H9.5C10.6046 12.5 11.5 11.6046 11.5 10.5V9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <path d="M7 1.5V9.5M7 1.5L4 4.5M7 1.5L10 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        `;
+        Object.assign(uploadBtn.style, {
+            width: '24px',
+            height: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            borderRadius: '2px',
+            color: 'var(--figma-text-tertiary)',
+            transition: 'background-color 0.15s, color 0.15s',
+            marginLeft: '4px'
+        });
+        uploadBtn.title = 'Upload Custom Font (TTF, OTF, WOFF)';
+
+        uploadBtn.addEventListener('mouseenter', () => {
+            uploadBtn.style.backgroundColor = 'var(--figma-hover-bg)';
+            uploadBtn.style.color = 'var(--figma-text-primary)';
+        });
+        uploadBtn.addEventListener('mouseleave', () => {
+            uploadBtn.style.backgroundColor = 'transparent';
+            uploadBtn.style.color = 'var(--figma-text-tertiary)';
+        });
+
+        uploadBtn.addEventListener('click', () => {
+            const name = prompt('请输入字体名称:');
+            if (!name) return;
+
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = '.ttf,.otf,.woff,.woff2';
+            fileInput.onchange = async (e: any) => {
+                const file = e.target.files[0];
+                if (file) {
+                    try {
+                        await fontManager.addCustomFont(name, file);
+                        updateOptions();
+                        // Automatically select the newly uploaded font
+                        const customFonts = fontManager.getCustomFonts();
+                        const newFont = customFonts.find((f: any) => f.name === name);
+                        if (newFont) {
+                            select.value = newFont.family;
+                            this.applyChange(key, newFont.family, 'text');
+                            fontManager.savePreference(newFont.family);
+                        }
+                    } catch (error: any) {
+                        alert(error.message);
+                    }
+                }
+            };
+            fileInput.click();
+        });
+        container.appendChild(uploadBtn);
+
+        const grid = (parent as any).grid;
+        if (grid) grid.appendChild(container);
+        else parent.appendChild(container);
+
+        return container;
+    }
+
+    private addSelectField(parent: HTMLElement, label: string, key: string, options: string[]): HTMLElement {
         const container = document.createElement('div');
         container.style.display = 'flex';
         container.style.alignItems = 'center';
@@ -1401,6 +1737,91 @@ export class PropertyPanel {
         const grid = (parent as any).grid;
         if (grid) grid.appendChild(container);
         else parent.appendChild(container);
+
+        return container;
+    }
+
+    private addPropertyFieldWithSlider(parent: HTMLElement, label: string, key: string, min: number, max: number): HTMLElement {
+        const container = document.createElement('div');
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.style.height = '32px';
+        container.style.position = 'relative';
+
+        const labelEl = document.createElement('div');
+        Object.assign(labelEl.style, {
+            width: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--figma-text-tertiary)',
+            fontSize: '10px',
+            fontWeight: '500',
+            flexShrink: '0',
+            cursor: 'ew-resize',
+            userSelect: 'none',
+            transition: 'color 0.15s'
+        });
+        labelEl.innerText = label;
+        container.appendChild(labelEl);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        Object.assign(input.style, {
+            width: '45px',
+            backgroundColor: 'transparent',
+            border: '1px solid transparent',
+            color: 'var(--figma-text-primary)',
+            fontSize: '11px',
+            padding: '4px',
+            outline: 'none',
+            borderRadius: '2px',
+            boxSizing: 'border-box',
+            transition: 'background-color 0.15s, border-color 0.15s'
+        });
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = min.toString();
+        slider.max = max.toString();
+        Object.assign(slider.style, {
+            flex: '1',
+            margin: '0 8px',
+            height: '2px',
+            cursor: 'pointer',
+            accentColor: 'var(--figma-blue)'
+        });
+
+        input.addEventListener('focus', () => {
+            input.style.backgroundColor = 'var(--figma-active-bg)';
+            input.style.border = '1px solid var(--figma-blue)';
+        });
+
+        input.addEventListener('blur', () => {
+            input.style.backgroundColor = 'transparent';
+            input.style.border = '1px solid transparent';
+            this.applyChange(key, parseFloat(input.value), 'number');
+            slider.value = input.value;
+        });
+
+        slider.addEventListener('input', () => {
+            input.value = slider.value;
+            this.applyChange(key, parseFloat(slider.value), 'number', false); // No history for continuous dragging
+        });
+
+        slider.addEventListener('change', () => {
+            this.applyChange(key, parseFloat(slider.value), 'number', true); // Record history on release
+        });
+
+        container.appendChild(slider);
+        container.appendChild(input);
+        this.fields[key] = input;
+
+        const grid = (parent as any).grid;
+        if (grid) grid.appendChild(container);
+        else parent.appendChild(container);
+
+        return container;
     }
 
     private addPropertyField(parent: HTMLElement, label: string, key: string, type: 'number' | 'color' | 'text'): HTMLElement {
@@ -1619,6 +2040,7 @@ export class PropertyPanel {
             let dragStartStates = new Map<Node, any>();
 
             labelEl.addEventListener('mousedown', (e) => {
+                if (input.disabled) return;
                 isDragging = true;
                 startX = e.clientX;
                 startVal = parseFloat(input.value) || 0;
@@ -1715,8 +2137,18 @@ export class PropertyPanel {
             case 'name': return node.name;
             case 'locked': return node.locked;
             case 'visible': return node.visible;
-            case 'textContent': return (node as any).text || (node as any).content || '';
+            case 'textContent': return (node as any).text !== undefined ? (node as any).text : ((node as any).content || '');
             case 'textureUrl': return (node as any).textureUrl || '';
+            case 'fontFamily': return (node as any).fontFamily || 'Arial';
+            case 'fontSize': return (node as any).fontSize || 12;
+            case 'fontWeight': return (node as any).fontWeight || 'normal';
+            case 'fontStyle': return (node as any).fontStyle || 'normal';
+            case 'textFillStyle': return (node as any).fillStyle || '#000000';
+            case 'letterSpacing': return (node as any).letterSpacing || 0;
+            case 'textStrokeStyle': return (node as any).strokeStyle || '#000000';
+            case 'textStrokeWidth': return (node as any).strokeWidth || 0;
+            case 'highlightType': return (node as any).highlightType || 'none';
+            case 'highlightColor': return (node as any).highlightColor || '#FFD700';
             case 'x': return Math.round(node.x);
             case 'y': return Math.round(node.y);
             case 'width': return Math.round(node.width);
@@ -1790,11 +2222,39 @@ export class PropertyPanel {
             case 'textContent':
                 if ((node as any).text !== undefined) {
                     (node as any).text = value;
-                    (node as any)._contentDirty = true;
                 } else if ((node as any).content !== undefined) {
                     (node as any).content = value;
-                    (node as any)._contentDirty = true;
                 }
+                break;
+            case 'fontFamily':
+                if ((node as any).fontFamily !== undefined) (node as any).fontFamily = value;
+                break;
+            case 'fontSize':
+                if ((node as any).fontSize !== undefined) (node as any).fontSize = num;
+                break;
+            case 'fontWeight':
+                if ((node as any).fontWeight !== undefined) (node as any).fontWeight = value;
+                break;
+            case 'fontStyle':
+                if ((node as any).fontStyle !== undefined) (node as any).fontStyle = value;
+                break;
+            case 'textFillStyle':
+                if ((node as any).fillStyle !== undefined) (node as any).fillStyle = value;
+                break;
+            case 'letterSpacing':
+                if ((node as any).letterSpacing !== undefined) (node as any).letterSpacing = num;
+                break;
+            case 'textStrokeStyle':
+                if ((node as any).strokeStyle !== undefined) (node as any).strokeStyle = value;
+                break;
+            case 'textStrokeWidth':
+                if ((node as any).strokeWidth !== undefined) (node as any).strokeWidth = num;
+                break;
+            case 'highlightType':
+                if ((node as any).highlightType !== undefined) (node as any).highlightType = value;
+                break;
+            case 'highlightColor':
+                if ((node as any).highlightColor !== undefined) (node as any).highlightColor = value;
                 break;
             case 'textureUrl':
                 if ((node as any).textureUrl !== undefined) {
@@ -1980,12 +2440,42 @@ export class PropertyPanel {
 
             // 3. 更新 Text 内容 (如果是 Text 节点)
             const textContentContainer = document.getElementById('text-content-container');
-            if (textContentContainer) {
+            const textSection = document.getElementById('text-section');
+            
+            if (textContentContainer || textSection) {
                 const allTextNodes = nodes.every(n => (n as any).text !== undefined || (n as any).content !== undefined);
-                textContentContainer.style.display = allTextNodes ? 'block' : 'none';
-                if (allTextNodes && this.fields['textContent']) {
-                    const { value, isMixed } = getMixedValueByKey('textContent');
-                    this.fields['textContent'].value = isMixed ? 'Mixed' : (value || '');
+                
+                if (textContentContainer) textContentContainer.style.display = allTextNodes ? 'block' : 'none';
+                if (textSection) textSection.style.display = allTextNodes ? 'block' : 'none';
+                
+                if (allTextNodes) {
+                    const textFields = [
+                        'textContent', 'fontFamily', 'fontSize', 'fontWeight', 
+                        'fontStyle', 'textFillStyle', 'letterSpacing', 
+                        'textStrokeStyle', 'textStrokeWidth',
+                        'highlight'
+                    ];
+                    
+                    textFields.forEach(key => {
+                        if (this.fields[key]) {
+                            const field = this.fields[key] as any;
+                            if (field.updateUI) {
+                                field.updateUI(nodes);
+                                return;
+                            }
+
+                            const { value, isMixed } = getMixedValueByKey(key);
+                            
+                            if (key === 'textFillStyle' || key === 'textStrokeStyle') {
+                                field.value = isMixed ? 'Mixed' : value;
+                                if (field.colorPicker) field.colorPicker.value = isMixed ? '#ffffff' : value;
+                                if (field.colorPreview) field.colorPreview.style.backgroundColor = isMixed ? 'transparent' : value;
+                            } else {
+                                field.value = isMixed ? '' : (value !== undefined ? value.toString() : '');
+                                field.placeholder = isMixed ? 'Mixed' : '';
+                            }
+                        }
+                    });
                 }
             }
 
@@ -2001,12 +2491,21 @@ export class PropertyPanel {
             }
 
             // 4. 更新布局 (Layout)
+            const allTextNodes = nodes.every(n => (n as any).text !== undefined || (n as any).content !== undefined);
             const layoutFields = ['x', 'y', 'width', 'height', 'rotation', 'scaleX', 'scaleY'];
             layoutFields.forEach(key => {
                 if (this.fields[key]) {
                     const { value, isMixed } = getMixedValueByKey(key);
-                    this.fields[key].value = isMixed ? '' : value.toString();
-                    this.fields[key].placeholder = isMixed ? 'Mixed' : '';
+                    const field = this.fields[key] as HTMLInputElement;
+                    field.value = isMixed ? '' : value.toString();
+                    field.placeholder = isMixed ? 'Mixed' : '';
+
+                    // 文字节点恢复宽高修改，但仍然根据对齐方式渲染
+                    if (key === 'width' || key === 'height') {
+                        field.disabled = allTextNodes;
+                        field.style.opacity = allTextNodes ? '0.5' : '1';
+                        field.style.cursor = allTextNodes ? 'default' : 'text';
+                    }
                 }
             });
 

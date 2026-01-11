@@ -90,6 +90,10 @@ export class Toolbar {
             }
         };
 
+        // Store update function to call it globally
+        (btn as any).updateStyle = updateStyle;
+        this.buttons.set(type || 'move', btn);
+
         btn.addEventListener('mouseenter', () => {
             if (this.engine.activeTool !== type) {
                 btn.style.backgroundColor = 'var(--figma-hover-bg)';
@@ -101,14 +105,8 @@ export class Toolbar {
             updateStyle();
         });
 
-        btn.addEventListener('mousedown', (e) => {
-            e.stopPropagation();
-            if (this.engine.activeTool === type) {
-                this.engine.activeTool = null;
-            } else {
-                this.engine.activeTool = type;
-            }
-            this.updateAllButtons();
+        btn.addEventListener('click', () => {
+            this.engine.setTool(type);
         });
 
         if (type) {
@@ -117,6 +115,7 @@ export class Toolbar {
                 img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                 e.dataTransfer?.setDragImage(img, 0, 0);
                 this.engine.interaction.startDragCreation(type, [e.clientX, e.clientY]);
+                this.engine.setTool(type);
             });
 
             btn.addEventListener('drag', (e) => {
@@ -129,15 +128,16 @@ export class Toolbar {
             });
         }
 
-        (btn as any).updateStyle = updateStyle;
         this.container.appendChild(btn);
-        this.buttons.set(label, btn);
         updateStyle();
     }
 
-    public updateAllButtons() {
-        this.buttons.forEach((btn) => {
-            (btn as any).updateStyle();
+    /**
+     * 更新当前选中的工具按钮状态
+     */
+    public updateActiveTool(tool: 'frame' | 'image' | 'text' | null) {
+        this.buttons.forEach((btn: any) => {
+            if (btn.updateStyle) btn.updateStyle();
         });
     }
 

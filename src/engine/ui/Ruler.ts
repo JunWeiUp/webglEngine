@@ -65,6 +65,10 @@ export class Ruler {
         this._dirty = true;
     }
 
+    public get isDirty(): boolean {
+        return this._dirty;
+    }
+
     /**
      * 按需渲染标尺
      */

@@ -6,7 +6,9 @@ import { Sprite } from './engine/scene/Sprite';
 import { Text } from './engine/scene/Text';
 import { Container } from './engine/scene/Container';
 import { MemoryTracker } from './engine/utils/MemoryProfiler';
+import { StatsMonitor } from './engine/ui/StatsMonitor';
 import { vec2, mat3 } from 'gl-matrix';
+import { FontManager } from './engine/system/FontManager';
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.style.position = 'absolute';
@@ -156,6 +158,7 @@ function loadBatch() {
             const text = new Text("HelloText " + i + "_" + j);
             text.setPosition(50, 200);
             text.fontSize = 30;
+            text.fontFamily = FontManager.getInstance().getPreference();
             text.fillStyle = "red";
             text.interactive = true;
             text.name = "HelloText" + i + "_" + j;
@@ -187,6 +190,7 @@ function loadBatch() {
         const instruction = new Text("Drag objects to move.\nDrop objects on other objects to reparent.\nDrag background to pan.\nScroll to Zoom.");
         instruction.setPosition(20, 20);
         instruction.fontSize = 16;
+        instruction.fontFamily = FontManager.getInstance().getPreference();
         instruction.fillStyle = "black";
         instruction.name = "Instructions";
         engine.scene.addChild(instruction);
@@ -369,64 +373,5 @@ engine.interaction.onCreateNode = (type: 'frame' | 'image' | 'text', x: number, 
 // Performance Stats & Debug Tools
 // ==========================================
 
-const statsContainer = document.createElement('div');
-statsContainer.style.position = 'absolute';
-statsContainer.style.bottom = '10px';
-statsContainer.style.left = '10px';
-statsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-statsContainer.style.color = '#00ff00';
-statsContainer.style.padding = '10px';
-statsContainer.style.fontFamily = 'monospace';
-statsContainer.style.fontSize = '12px';
-statsContainer.style.pointerEvents = 'none';
-statsContainer.style.zIndex = '1000';
-document.body.appendChild(statsContainer);
+new StatsMonitor(engine);
 
-let lastUpdateTime = 0;
-let totalNodes = 0;
-
-function updateStats(time: number) {
-    // 每 300ms 更新一次 UI，而不是每帧 (16ms)
-    if (time - lastUpdateTime < 300) {
-        requestAnimationFrame(updateStats);
-        return;
-    }
-    lastUpdateTime = time;
-
-    const glStats = engine.renderer.stats;
-    const smooth = glStats.smoothTimes;
-    const scene = engine.scene;
-    const memTracker = MemoryTracker.getInstance();
-    const memStats = memTracker.getStats();
-
-    // 只有当节点数量可能变化时才重新遍历 (或者简单地每秒遍历一次)
-    if (totalNodes === 0 || Math.random() < 0.05) {
-        totalNodes = 0;
-        scene.traverse(() => totalNodes++);
-    }
-
-    statsContainer.innerHTML = `
-        <div style="font-weight: bold; color: #fff; margin-bottom: 5px;">Performance Monitor</div>
-        FPS: ${glStats.lastFPS}<br>
-        Total Nodes: ${totalNodes}<br>
-        Draw Calls: ${glStats.drawCalls}<br>
-        Quads: ${glStats.quadCount}<br>
-        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
-        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Memory Usage</div>
-        <div style="color: #00ffff;">Total: ${MemoryTracker.formatBytes(memStats.totalBytes)}</div>
-        GPU Tex: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Texture'] || 0)}<br>
-        GPU Buf: ${MemoryTracker.formatBytes(memStats.totalByGroup['GPU Buffer'] || 0)}<br>
-        CPU Canvas: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU Canvas'] || 0)}<br>
-        CPU Array: ${MemoryTracker.formatBytes(memStats.totalByGroup['CPU TypedArray'] || 0)}<br>
-        <hr style="border: 0; border-top: 1px solid #444; margin: 5px 0;">
-        <div style="font-weight: bold; color: #fff; margin-bottom: 2px;">Timing (ms)</div>
-        WebGL Render: ${smooth.renderWebGL.toFixed(2)}<br>
-        Flush (GPU): ${smooth.flush.toFixed(2)}<br>
-        Canvas 2D: ${smooth.canvas2D.toFixed(2)}<br>
-        Logic: ${smooth.logic.toFixed(2)}<br>
-        Interaction to Render: ${smooth.interactionToRender.toFixed(2)}<br>
-        <div style="color: #ffff00; margin-top: 2px;">Total: ${smooth.total.toFixed(2)}</div>
-    `;
-    requestAnimationFrame(updateStats);
-}
-requestAnimationFrame(updateStats);

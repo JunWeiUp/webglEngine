@@ -81,8 +81,8 @@ src/
 │   ├── core/           # 核心渲染逻辑 (Renderer, WebGL Shader, TextureAtlas)
 │   ├── display/        # 显示对象 (Node, Sprite, Container, Text)
 │   ├── events/         # 交互管理 (InteractionManager)
-│   ├── ui/             # 调试 UI (OutlineView)
-│   └── utils/          # 工具类 (AtlasManager, TextureManager)
+│   ├── ui/             # 调试 UI (OutlineView, StatsMonitor)
+│   └── utils/          # 工具类 (AtlasManager, TextureManager, MemoryProfiler)
 ├── main.ts             # 入口文件 (场景初始化, 测试数据生成)
 └── style.css           # 基础样式
 ```

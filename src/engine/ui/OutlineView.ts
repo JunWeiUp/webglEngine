@@ -33,6 +33,12 @@ export class OutlineView {
     // Key: Node, Value: DOM Element currently rendered
     private renderedNodeMap: Map<Node, HTMLElement> = new Map();
 
+    // Drag and drop state
+    private draggedNode: Node | null = null;
+    private dropTargetNode: Node | null = null;
+    private dropPosition: 'before' | 'after' | 'inside' | null = null;
+    private dropIndicator: HTMLElement;
+
     constructor(rootNode: Node, auxLayer: AuxiliaryLayer, _renderer: Renderer, interaction: InteractionManager) {
         this.rootNode = rootNode;
         this.auxLayer = auxLayer;
@@ -40,6 +46,17 @@ export class OutlineView {
         
         // Default expand root
         this.expandedNodes.add(rootNode);
+
+        // Create drop indicator
+        this.dropIndicator = document.createElement('div');
+        this.dropIndicator.style.position = 'absolute';
+        this.dropIndicator.style.left = '0';
+        this.dropIndicator.style.right = '0';
+        this.dropIndicator.style.height = '2px';
+        this.dropIndicator.style.backgroundColor = 'var(--figma-blue)';
+        this.dropIndicator.style.pointerEvents = 'none';
+        this.dropIndicator.style.display = 'none';
+        this.dropIndicator.style.zIndex = '1001';
         
         // --- DOM Structure ---
         // container (absolute, fixed size)
@@ -92,6 +109,20 @@ export class OutlineView {
         this.itemContainer.style.left = '0';
         this.itemContainer.style.width = '100%';
         this.scrollContainer.appendChild(this.itemContainer);
+
+        this.itemContainer.appendChild(this.dropIndicator);
+
+        this.itemContainer.ondragover = (e) => {
+            e.preventDefault();
+        };
+        this.itemContainer.ondragleave = (e) => {
+            // If we leave the item container, hide indicator
+            if (e.relatedTarget === null || !this.itemContainer.contains(e.relatedTarget as HTMLElement)) {
+                this.dropIndicator.style.display = 'none';
+                this.dropTargetNode = null;
+                this.dropPosition = null;
+            }
+        };
 
         document.body.appendChild(this.container);
 
@@ -209,12 +240,15 @@ export class OutlineView {
         
         while (this.itemContainer.firstChild) {
             const child = this.itemContainer.firstChild as HTMLElement;
-            // 清理事件监听器？由于我们每次都重新创建/绑定 onclick，
-            // 只要没有外部引用，GC 会处理。但在复用时需要小心。
-            // 简单的复用：只复用 div 容器，内容重填
+            if (child === this.dropIndicator) {
+                this.itemContainer.removeChild(child);
+                continue;
+            }
             this.itemContainer.removeChild(child);
             this.recycleItem(child);
         }
+        
+        this.itemContainer.appendChild(this.dropIndicator);
         
         this.renderedNodeMap.clear();
 
@@ -247,6 +281,14 @@ export class OutlineView {
         div.onclick = null;
         div.onmouseenter = null;
         div.onmouseleave = null;
+
+        // Drag and drop events
+        div.draggable = item.node !== this.rootNode; // Root node cannot be dragged
+        div.ondragstart = (e) => this.onDragStart(e, item.node);
+        div.ondragover = (e) => this.onDragOver(e, item.node);
+        div.ondragleave = () => this.onDragLeave();
+        div.ondrop = (e) => this.onDrop(e, item.node);
+        div.ondragend = () => this.onDragEnd();
         
         div.style.height = `${this.itemHeight}px`;
         div.style.lineHeight = `${this.itemHeight}px`;
@@ -490,5 +532,160 @@ export class OutlineView {
             // 滚动到该位置 (居中)
             this.scrollContainer.scrollTop = targetTop - viewportHeight / 2 + this.itemHeight / 2;
         }
+    }
+
+    // --- Drag and Drop Handlers ---
+
+    private onDragStart(e: DragEvent, node: Node) {
+        this.draggedNode = node;
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', node.id.toString());
+            // Create a ghost image if needed, or just let the browser handle it
+        }
+        // Fade out the dragged item slightly
+        const el = this.renderedNodeMap.get(node);
+        if (el) el.style.opacity = '0.5';
+    }
+
+    private onDragOver(e: DragEvent, node: Node) {
+        e.preventDefault();
+        if (!this.draggedNode || this.draggedNode === node || this.isDescendant(node, this.draggedNode)) {
+            return;
+        }
+
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const height = rect.height;
+
+        this.dropTargetNode = node;
+        const isContainer = node.constructor.name === 'Container' || node === this.rootNode;
+
+        // Determine drop position: top 25% = before, bottom 25% = after, middle 50% = inside
+        if (y < height * 0.25) {
+            this.dropPosition = 'before';
+            this.showDropIndicator(node, 'before');
+        } else if (y > height * 0.75) {
+            this.dropPosition = 'after';
+            this.showDropIndicator(node, 'after');
+        } else if (isContainer) {
+            this.dropPosition = 'inside';
+            this.showDropIndicator(node, 'inside');
+        } else {
+            // If not a container, default to before or after based on closer edge
+            if (y < height * 0.5) {
+                this.dropPosition = 'before';
+                this.showDropIndicator(node, 'before');
+            } else {
+                this.dropPosition = 'after';
+                this.showDropIndicator(node, 'after');
+            }
+        }
+
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'move';
+        }
+    }
+
+    private onDragLeave() {
+        // We don't necessarily want to hide it here because we might be moving into another item
+    }
+
+    private onDrop(e: DragEvent, node: Node) {
+        e.preventDefault();
+        if (!this.draggedNode || !this.dropTargetNode || !this.dropPosition) return;
+
+        this.handleDrop();
+        this.onDragEnd();
+    }
+
+    private onDragEnd() {
+        if (this.draggedNode) {
+            const el = this.renderedNodeMap.get(this.draggedNode);
+            if (el) el.style.opacity = '1';
+        }
+        this.draggedNode = null;
+        this.dropTargetNode = null;
+        this.dropPosition = null;
+        this.dropIndicator.style.display = 'none';
+    }
+
+    private showDropIndicator(node: Node, position: 'before' | 'after' | 'inside') {
+        const index = this.flattenList.findIndex(item => item.node === node);
+        if (index === -1) return;
+
+        const scrollTop = this.scrollContainer.scrollTop;
+        const startIndex = Math.floor(scrollTop / this.itemHeight);
+        
+        // Position relative to itemContainer
+        const relativeIndex = index - startIndex;
+        const top = relativeIndex * this.itemHeight;
+        
+        this.dropIndicator.style.display = 'block';
+        this.dropIndicator.style.left = '0';
+        this.dropIndicator.style.width = '100%';
+
+        if (position === 'before') {
+            this.dropIndicator.style.transform = `translateY(${top}px)`;
+            this.dropIndicator.style.height = '2px';
+            this.dropIndicator.style.backgroundColor = 'var(--figma-blue)';
+        } else if (position === 'after') {
+            this.dropIndicator.style.transform = `translateY(${top + this.itemHeight}px)`;
+            this.dropIndicator.style.height = '2px';
+            this.dropIndicator.style.backgroundColor = 'var(--figma-blue)';
+        } else {
+            // Inside: highlight the whole item
+            this.dropIndicator.style.transform = `translateY(${top}px)`;
+            this.dropIndicator.style.height = `${this.itemHeight}px`;
+            this.dropIndicator.style.backgroundColor = 'rgba(24, 144, 255, 0.1)'; // Light blue overlay
+            this.dropIndicator.style.border = '1px solid var(--figma-blue)';
+            this.dropIndicator.style.boxSizing = 'border-box';
+        }
+    }
+
+    private handleDrop() {
+        const dragged = this.draggedNode!;
+        const target = this.dropTargetNode!;
+        const position = this.dropPosition!;
+
+        if (position === 'inside') {
+            // Add as last child of target
+            target.addChild(dragged);
+            this.expandedNodes.add(target);
+        } else {
+            const parent = target.parent;
+            if (!parent) return;
+
+            let targetIndex = parent.children.indexOf(target);
+            if (position === 'after') {
+                targetIndex++;
+            }
+            
+            // If dragged is moving within the same parent and to a later index, 
+            // the actual target index will shift after removal
+            if (dragged.parent === parent) {
+                const currentIndex = parent.children.indexOf(dragged);
+                if (currentIndex < targetIndex) {
+                    targetIndex--;
+                }
+            }
+
+            parent.addChild(dragged, targetIndex);
+        }
+
+        this.rebuildList();
+        
+        if (this.interaction.onSelectionChange) {
+            this.interaction.onSelectionChange();
+        }
+    }
+
+    private isDescendant(node: Node, parent: Node): boolean {
+        let current = node.parent;
+        while (current) {
+            if (current === parent) return true;
+            current = current.parent;
+        }
+        return false;
     }
 }

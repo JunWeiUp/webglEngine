@@ -9,8 +9,11 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@vitest/ui": "^3.2.4",
+    "jsdom": "^27.0.1",
     "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@types/rbush": "^4.0.0",

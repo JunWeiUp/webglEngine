@@ -6,11 +6,14 @@ import { PropertyPanel } from '../ui/PropertyPanel';
 import { Toolbar } from '../ui/Toolbar';
 import { Ruler } from '../ui/Ruler';
 import { AuxiliaryLayer } from '../interaction/AuxiliaryLayer';
+import { TextEditor } from '../interaction/TextEditor';
 import type { Rect } from '../math/Rect';
 import { AtlasManager } from '../rendering/AtlasManager';
 import { MatrixSpatialIndex } from '../scene/MatrixSpatialIndex';
 
 import { HistoryManager } from '../history/HistoryManager';
+import { FontManager } from './FontManager';
+import { Text } from '../scene/Text';
 
 /**
  * 引擎入口类
@@ -35,6 +38,7 @@ export class Engine {
     public toolbar: Toolbar;
     public ruler: Ruler;
     public auxLayer: AuxiliaryLayer;
+    public textEditor: TextEditor;
     public alwaysRender: boolean = false;
     public activeTool: 'frame' | 'image' | 'text' | null = null;
     public showRulers: boolean = true;
@@ -84,8 +88,16 @@ export class Engine {
         // 初始化历史记录管理器
         this.history = new HistoryManager();
 
+        // 监听字体变化并更新场景
+        FontManager.getInstance().addChangeListener((family) => {
+            this.updateAllTextFonts(family);
+        });
+
         // 初始化交互管理器 (连接渲染器、场景和辅助图层)
         this.interaction = new InteractionManager(this, this.renderer, this.scene, this.auxLayer);
+
+        // 初始化文字编辑器
+        this.textEditor = new TextEditor(this, container);
 
         // 初始化调试用的大纲视图
         this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer, this.interaction);
@@ -93,6 +105,7 @@ export class Engine {
         // 初始化属性面板
         this.propertyPanel = new PropertyPanel(this);
         this.propertyPanel.onPropertyChange = () => {
+            this.textEditor.updatePosition();
             this.requestRender();
         };
 
@@ -102,6 +115,7 @@ export class Engine {
         // 监听摄像机视图变化，更新标尺
         this.interaction.onViewChange = () => {
             this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
+            this.textEditor.updatePosition();
         };
 
         // 监听鼠标移动，更新标尺指示线
@@ -151,6 +165,7 @@ export class Engine {
             this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
             this.updateRulerSelection();
             
+            this.textEditor.updatePosition();
             this.requestRender();
         };
         this.interaction.onHoverChange = () => {
@@ -164,6 +179,7 @@ export class Engine {
             this.renderer.resize(rect.width, rect.height);
             this.ruler.resize();
             this.ruler.updateTransform(this.interaction.cameraX, this.interaction.cameraY, this.interaction.cameraScale);
+            this.textEditor.updatePosition();
             this.requestRender(); // 尺寸变化触发渲染
         };
         window.addEventListener('resize', this._resizeHandler);
@@ -232,6 +248,25 @@ export class Engine {
                 height: maxY - minY
             });
         }
+    }
+
+    public setTool(tool: 'frame' | 'image' | 'text' | null) {
+        this.activeTool = tool;
+        this.toolbar.updateActiveTool(tool);
+    }
+
+    /**
+     * 更新场景中所有文字节点的字体
+     */
+    private updateAllTextFonts(family: string) {
+        const updateNode = (node: Node) => {
+            if (node instanceof Text) {
+                node.fontFamily = family;
+            }
+            node.children.forEach(updateNode);
+        };
+        updateNode(this.scene);
+        this.invalidateFull();
     }
 
     /**
@@ -368,8 +403,9 @@ export class Engine {
         // 确定渲染区域
         const drawWebGL = this.sceneDirty || this.fullInvalidate;
         const drawAux = this.dirtyRect !== null || this.fullInvalidate;
+        const drawRuler = this.ruler.isDirty || this.fullInvalidate;
 
-        if (!drawWebGL && !drawAux) {
+        if (!drawWebGL && !drawAux && !drawRuler) {
             // 如果什么都不需要画，直接退出
             this._rafId = null;
             return;
