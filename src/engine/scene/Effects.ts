@@ -48,7 +48,7 @@ export interface Constraints {
  */
 export interface NodeStyle {
     /** 背景颜色 [r, g, b, a] */
-    backgroundColor?: [number, number, number, number];
+    backgroundColor?: [number, number, number, number] | Float32Array;
     /** 圆角半径 [topLeft, topRight, bottomRight, bottomLeft] 或 单个数字 */
     borderRadius?: number | [number, number, number, number];
     /** 边框颜色 */

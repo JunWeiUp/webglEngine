@@ -1,9 +1,11 @@
 import { Node } from './Node';
-import { Renderer } from '../core/Renderer';
-import type { IRenderer } from '../core/IRenderer';
-import { Texture } from '../core/Texture';
-import { AtlasManager } from '../utils/AtlasManager';
+import { Renderer } from '../rendering/Renderer';
+import type { IRenderer } from '../rendering/IRenderer';
+import { Texture } from '../rendering/Texture';
+import { AtlasManager } from '../rendering/AtlasManager';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
+import { RenderBatchHelper } from '../rendering/RenderBatchHelper';
+import type { Rect } from '../math/Rect';
 
 export class Text extends Node {
     public text: string = "";
@@ -21,12 +23,38 @@ export class Text extends Node {
     // 用于 Atlas 重置回调
     private _resetHandler: () => void;
 
+    // --- 颜色属性优化 ---
+    // Text 背景默认为透明
+    private static readonly DEFAULT_BG_COLOR = (() => {
+        const arr = new Float32Array([0, 0, 0, 0]);
+        MemoryTracker.getInstance().track(MemoryCategory.CPU_TYPED_ARRAY, 'Text_DEFAULT_BG_COLOR', arr.byteLength, 'Text Default Background Color');
+        return arr;
+    })();
+
+    /** 文本填充颜色 (RGBA) */
+    public get color(): Float32Array {
+        const bg = this.style.backgroundColor;
+        if (bg instanceof Float32Array) return bg;
+        if (Array.isArray(bg)) {
+            const arr = new Float32Array(bg);
+            this.style.backgroundColor = arr;
+            return arr;
+        }
+        return Text.DEFAULT_BG_COLOR;
+    }
+    public set color(value: Float32Array) {
+        this.style.backgroundColor = value;
+        this.invalidate();
+    }
+
     constructor(text: string = "") {
         super();
         this.text = text;
-        // this.width = 100;
-        // this.height = 20;
         this.set(this.x, this.y, 100, 20);
+        
+        // 初始化背景颜色为透明
+        this.style = { backgroundColor: Text.DEFAULT_BG_COLOR };
+
         // 绑定回调，当 Atlas 重置时，标记内容脏，以便下次渲染时重新添加
         this._resetHandler = () => {
             this._contentDirty = true;
@@ -102,8 +130,6 @@ export class Text extends Node {
         ctx.fillText(this.text, 0, 0);
 
         // 4. 更新节点尺寸
-        // this.width = textWidth;
-        // this.height = textHeight;
         this.set(this.x, this.y, textWidth, textHeight);
 
 
@@ -124,7 +150,6 @@ export class Text extends Node {
             }
         } else {
             // 如果添加失败（例如图集太小），降级或报错
-            // 这里暂不做降级处理，因为 Text 通常很小
             console.warn("Failed to add text to atlas");
         }
 
@@ -134,47 +159,22 @@ export class Text extends Node {
     // 缓存颜色数组，避免 GC
     private static _sharedColor = new Float32Array([1, 1, 1, 1]);
 
-    renderWebGL(renderer: IRenderer) {
+    renderWebGL(renderer: IRenderer, dirtyRect?: Rect) {
         // 调用基类渲染效果和背景
-        super.renderWebGL(renderer);
+        super.renderWebGL(renderer, dirtyRect);
 
         this.updateTexture(renderer as Renderer);
 
         if (!this._texture || !this._texture.baseTexture) return; // 确保 texture 和 baseTexture 都存在
 
-        // 渲染纹理 Quad
-        const m = this.getWorldMatrix();
-        const w = this.width;
-        const h = this.height;
-
-        const m00 = m[0], m01 = m[1];
-        const m10 = m[3], m11 = m[4];
-        const m20 = m[6], m21 = m[7];
-
-        // 计算四个顶点坐标 (无需 new Float32Array)
-        // TL (0, 0)
-        const x0 = m20;
-        const y0 = m21;
-        // TR (w, 0)
-        const x1 = m00 * w + m20;
-        const y1 = m01 * w + m21;
-        // BR (w, h)
-        const x2 = m00 * w + m10 * h + m20;
-        const y2 = m01 * w + m11 * h + m21;
-        // BL (0, h)
-        const x3 = m10 * h + m20;
-        const y3 = m11 * h + m21;
-
-        renderer.drawQuadFast(
-            this._texture.baseTexture,
-            x0, y0,
-            x1, y1,
-            x2, y2,
-            x3, y3,
-            this._texture.uvs,
+        // 使用 RenderBatchHelper 提交到渲染器批次
+        RenderBatchHelper.drawQuad(
+            renderer,
+            this.getWorldMatrix(),
+            this.width,
+            this.height,
+            this._texture,
             Text._sharedColor
         );
     }
-
-
 }

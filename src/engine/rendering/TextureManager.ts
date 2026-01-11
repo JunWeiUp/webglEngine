@@ -1,5 +1,5 @@
-import { Texture } from '../core/Texture';
-import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
+import { Texture } from './Texture';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class TextureManager {
     private static cache: Map<string, Texture> = new Map();

@@ -1,14 +1,16 @@
-import { Renderer } from './core/Renderer';
-import { Node } from './display/Node';
-import { InteractionManager } from './events/InteractionManager';
-import { OutlineView } from './ui/OutlineView';
-import { PropertyPanel } from './ui/PropertyPanel';
-import { Toolbar } from './ui/Toolbar';
-import { Ruler } from './ui/Ruler';
-import { AuxiliaryLayer } from './display/AuxiliaryLayer';
-import type { Rect } from './core/Rect';
-import { AtlasManager } from './utils/AtlasManager';
-import { MatrixSpatialIndex } from './core/MatrixSpatialIndex';
+import { Renderer } from '../rendering/Renderer';
+import { Node } from '../scene/Node';
+import { InteractionManager } from '../interaction/InteractionManager';
+import { OutlineView } from '../ui/OutlineView';
+import { PropertyPanel } from '../ui/PropertyPanel';
+import { Toolbar } from '../ui/Toolbar';
+import { Ruler } from '../ui/Ruler';
+import { AuxiliaryLayer } from '../interaction/AuxiliaryLayer';
+import type { Rect } from '../math/Rect';
+import { AtlasManager } from '../rendering/AtlasManager';
+import { MatrixSpatialIndex } from '../scene/MatrixSpatialIndex';
+
+import { HistoryManager } from '../history/HistoryManager';
 
 /**
  * 引擎入口类
@@ -17,6 +19,7 @@ import { MatrixSpatialIndex } from './core/MatrixSpatialIndex';
  * - Renderer: WebGL 渲染器
  * - Scene: 场景图根节点
  * - InteractionManager: 交互管理
+ * - HistoryManager: 历史记录管理
  * - AuxiliaryLayer: 辅助图层 (UI/调试)
  * - OutlineView: 大纲视图 (调试 UI)
  * 
@@ -26,6 +29,7 @@ export class Engine {
     public renderer: Renderer;
     public scene: Node;
     public interaction: InteractionManager;
+    public history: HistoryManager;
     public outline: OutlineView;
     public propertyPanel: PropertyPanel;
     public toolbar: Toolbar;
@@ -77,6 +81,9 @@ export class Engine {
         // 初始化标尺
         this.ruler = new Ruler(this.container);
 
+        // 初始化历史记录管理器
+        this.history = new HistoryManager();
+
         // 初始化交互管理器 (连接渲染器、场景和辅助图层)
         this.interaction = new InteractionManager(this, this.renderer, this.scene, this.auxLayer);
 
@@ -84,7 +91,7 @@ export class Engine {
         this.outline = new OutlineView(this.scene, this.auxLayer, this.renderer, this.interaction);
 
         // 初始化属性面板
-        this.propertyPanel = new PropertyPanel();
+        this.propertyPanel = new PropertyPanel(this);
         this.propertyPanel.onPropertyChange = () => {
             this.requestRender();
         };

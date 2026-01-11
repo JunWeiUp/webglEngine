@@ -1,5 +1,3 @@
-import { Renderer } from '../core/Renderer';
-
 export class Ruler {
     public horizontalCanvas: HTMLCanvasElement;
     public verticalCanvas: HTMLCanvasElement;

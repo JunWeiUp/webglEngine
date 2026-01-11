@@ -1,7 +1,7 @@
-import { Node } from './Node';
+import { Node } from '../scene/Node';
 import { mat3, vec2 } from 'gl-matrix';
-import type { Rect } from '../core/Rect';
-import type { IRenderer } from '../core/IRenderer';
+import type { Rect } from '../math/Rect';
+import type { IRenderer } from '../rendering/IRenderer';
 
 export type HandleType = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se' | 'r' | 'rnw' | 'rne' | 'rse' | 'rsw';
 
@@ -33,11 +33,9 @@ export class AuxiliaryLayer {
 
     // --- 预分配临时变量 (GC 优化) ---
     private _tempMat3a = mat3.create();
-    private _tempMat3b = mat3.create();
     private _tempVec2a = vec2.create();
     private _tempVec2b = vec2.create();
     private _tempVec2c = vec2.create();
-    private _tempVec2d = vec2.create();
     private _tempCorners = [vec2.create(), vec2.create(), vec2.create(), vec2.create()];
 
     // Multi-selection support
@@ -68,7 +66,7 @@ export class AuxiliaryLayer {
     constructor() { }
 
 
-    render(ctx: CanvasRenderingContext2D, scene: Node, renderer: IRenderer, dirtyRect?: Rect) {
+    render(ctx: CanvasRenderingContext2D, _scene: Node, renderer: IRenderer, dirtyRect?: Rect) {
         const viewMatrix = renderer.getViewMatrix();
         // Reset transform to identity to draw in screen space
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -87,11 +85,13 @@ export class AuxiliaryLayer {
         // Iterate over all selected nodes
         for (const node of this.selectedNodes) {
             if (node !== this.draggingNode) {
-                this.drawBounds(ctx, node, viewMatrix, '#0000ff', 2, false, dirtyRect);
+                // 如果节点不可见，使用半透明蓝色和虚线
+                const color = node.visible ? '#0000ff' : 'rgba(0, 0, 255, 0.3)';
+                this.drawBounds(ctx, node, viewMatrix, color, 2, !node.visible, dirtyRect);
                 
                 // Only draw handles for the first selected node (or all if you prefer)
-                // For simplicity, let's draw handles if only one node is selected
-                if (this.selectedNodes.size === 1) {
+                // 如果节点被锁定，不绘制手柄
+                if (this.selectedNodes.size === 1 && !node.locked) {
                     this.drawHandles(ctx, node, viewMatrix, dirtyRect);
                 }
             }
@@ -99,7 +99,9 @@ export class AuxiliaryLayer {
 
         // 2. Draw Hover
         if (this.hoveredNode && !this.selectedNodes.has(this.hoveredNode) && this.hoveredNode !== this.draggingNode) {
-            this.drawBounds(ctx, this.hoveredNode, viewMatrix, '#ffff00', 2, false, dirtyRect);
+            // 如果节点不可见，hover 时也显示淡黄色虚线
+            const color = this.hoveredNode.visible ? '#ffff00' : 'rgba(255, 255, 0, 0.5)';
+            this.drawBounds(ctx, this.hoveredNode, viewMatrix, color, 2, !this.hoveredNode.visible, dirtyRect);
         }
 
         // 3. Draw Dragging Logic
@@ -244,12 +246,11 @@ export class AuxiliaryLayer {
             bounds.maxY < dirtyRect.y);
     }
 
+/*
     private getGlobalScale(node: Node, viewMatrix: mat3): number {
-        // Approximate global scale including view matrix
-        const m = this._tempMat3a;
-        mat3.multiply(m, viewMatrix, node.getWorldMatrix());
-        return Math.hypot(m[0], m[1]);
+        // ...
     }
+*/
 
     private getScreenBounds(node: Node, viewMatrix: mat3): { minX: number, minY: number, maxX: number, maxY: number } | null {
         // Combined matrix: view * world

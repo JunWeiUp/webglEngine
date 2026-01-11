@@ -1,10 +1,11 @@
-import { Node } from '../display/Node';
-import { Renderer } from '../core/Renderer';
+import { Node } from '../scene/Node';
+import { Renderer } from '../rendering/Renderer';
 import { vec2, mat3 } from 'gl-matrix';
-import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
-import type { Guide } from '../display/AuxiliaryLayer';
-import type { Rect } from '../core/Rect';
-import type { Engine } from '../Engine';
+import { AuxiliaryLayer } from './AuxiliaryLayer';
+import type { Guide, Handle } from './AuxiliaryLayer';
+import type { Rect } from '../math/Rect';
+import type { Engine } from '../system/Engine';
+import { TransformCommand, CreateCommand, DeleteCommand } from '../history/Command';
 
 /**
  * 交互管理器
@@ -62,14 +63,14 @@ export class InteractionManager {
     private lastMousePos: vec2 = vec2.create();
     // 拖拽/缩放开始时的状态记录
     private dragStartMousePos: vec2 = vec2.create();
-    private dragStartNodesState: Map<Node, { x: number, y: number, w: number, h: number, rotation: number }> = new Map();
+    private dragStartNodesState: Map<Node, { x: number, y: number, w: number, h: number, rotation: number, parent: Node | null, index: number }> = new Map();
     // 框选起始点
     private boxSelectStart: vec2 = vec2.create();
     // 旋转中心点 (世界空间)
     private rotationPivot: vec2 = vec2.create();
 
     // 绑定后的事件处理器，用于注销
-    private _handlers: Record<string, (e: any) => void> = {};
+    private _handlers: Record<string, any> = {};
 
     constructor(engine: Engine, renderer: Renderer, scene: Node, auxLayer: AuxiliaryLayer) {
         this.engine = engine;
@@ -129,12 +130,12 @@ export class InteractionManager {
         canvas.addEventListener('mousedown', this._handlers.mousedown);
         canvas.addEventListener('mousemove', this._handlers.mousemove);
         canvas.addEventListener('mouseup', this._handlers.mouseup);
-        canvas.addEventListener('wheel', this._handlers.wheel, { passive: false });
+        canvas.addEventListener('wheel', this._handlers.wheel as any, { passive: false });
         window.addEventListener('keydown', this._handlers.keydown);
 
         // Ruler events
-        this.engine.ruler.horizontalCanvas.addEventListener('mousedown', (e) => this.onRulerMouseDown(e, 'h'));
-        this.engine.ruler.verticalCanvas.addEventListener('mousedown', (e) => this.onRulerMouseDown(e, 'v'));
+        this.engine.ruler.horizontalCanvas.addEventListener('mousedown', (e: MouseEvent) => this.onRulerMouseDown(e, 'h'));
+        this.engine.ruler.verticalCanvas.addEventListener('mousedown', (e: MouseEvent) => this.onRulerMouseDown(e, 'v'));
     }
 
     /**
@@ -175,6 +176,8 @@ export class InteractionManager {
     private collectSnapPoints(type: 'v' | 'h') {
         this.activeSnapPoints = [];
         const traverse = (node: Node) => {
+            if (!node.visible || node.locked) return;
+            
             if (node.interactive && node.parent) {
                 // 性能优化：使用 getBounds(false) 获取节点自身的世界包围盒，避免递归计算子节点合并包围盒
                 const bounds = node.getBounds(false); 
@@ -261,22 +264,45 @@ export class InteractionManager {
             }
         }
 
-        // 2. 节点/参考线删除
+        // 2. Undo/Redo
+        if (isCmdOrCtrl && !isShift && key === 'z') {
+            e.preventDefault();
+            this.engine.history.undo();
+            if (this.onStructureChange) this.onStructureChange();
+            if (this.onSelectionChange) this.onSelectionChange();
+            if (this.onTransformChange) this.onTransformChange();
+            this.engine.requestRender();
+            return;
+        }
+        if (isCmdOrCtrl && ((isShift && key === 'z') || key === 'y')) {
+            e.preventDefault();
+            this.engine.history.redo();
+            if (this.onStructureChange) this.onStructureChange();
+            if (this.onSelectionChange) this.onSelectionChange();
+            if (this.onTransformChange) this.onTransformChange();
+            this.engine.requestRender();
+            return;
+        }
+
+        // 3. 节点/参考线删除
         if (key === 'backspace' || key === 'delete') {
             let changed = false;
             
             // 删除节点
             if (this.auxLayer.selectedNodes.size > 0) {
-                const nodesToRemove = Array.from(this.auxLayer.selectedNodes);
-                nodesToRemove.forEach(node => {
-                    if (node.parent) {
-                        node.parent.removeChild(node);
-                    }
-                });
-                this.auxLayer.selectedNodes.clear();
-                if (this.onSelectionChange) this.onSelectionChange();
-                if (this.onStructureChange) this.onStructureChange();
-                changed = true;
+                const nodesToRemove = Array.from(this.auxLayer.selectedNodes).filter(n => !n.locked);
+                if (nodesToRemove.length > 0) {
+                    const parents = new Map<Node, { parent: Node, index: number }>();
+                    
+                    // 记录删除前的状态到历史记录
+                    const command = new DeleteCommand(nodesToRemove, parents);
+                    this.engine.history.execute(command);
+
+                    nodesToRemove.forEach(n => this.auxLayer.selectedNodes.delete(n));
+                    if (this.onSelectionChange) this.onSelectionChange();
+                    if (this.onStructureChange) this.onStructureChange();
+                    changed = true;
+                }
             }
 
             // 删除参考线
@@ -309,10 +335,23 @@ export class InteractionManager {
                 case 'arrowright': dx = step; break;
             }
 
-            this.auxLayer.selectedNodes.forEach(node => {
+            const nodes = Array.from(this.auxLayer.selectedNodes).filter(n => !n.locked);
+            if (nodes.length === 0) return;
+
+            const oldStates = new Map<Node, any>();
+            const newStates = new Map<Node, any>();
+
+            nodes.forEach(node => {
+                const parent = node.parent;
+                const index = parent ? parent.children.indexOf(node) : -1;
+                oldStates.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index });
                 node.setPosition(node.x + dx, node.y + dy);
+                newStates.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index });
             });
             
+            const command = new TransformCommand(nodes, oldStates, newStates);
+            this.engine.history.push(command);
+
             if (this.onTransformChange) this.onTransformChange();
             this.engine.requestRender();
         }
@@ -339,10 +378,10 @@ export class InteractionManager {
     private getWorldMousePos(e: MouseEvent | vec2, out?: vec2): vec2 {
         const res = out || vec2.create();
         let pos: vec2;
-        if ('clientX' in (e as any)) {
-            pos = this.getMousePos(e as MouseEvent, this._tempVec2a);
+        if (e instanceof MouseEvent) {
+            pos = this.getMousePos(e, this._tempVec2a);
         } else {
-            pos = e as vec2;
+            pos = e;
         }
         vec2.transformMat3(res, pos, this.renderer.getViewMatrixInverse());
         return res;
@@ -353,6 +392,9 @@ export class InteractionManager {
      * 深度优先遍历，从后往前查找 (后渲染的先检测)
      */
     private hitTest(node: Node, worldPos: vec2): Node | null {
+        // 如果节点不可见或已锁定，跳过拾取
+        if (!node.visible || node.locked) return null;
+
         // 1. 优先递归检测子节点
         if (node.childSpatialIndex) {
             const hit = node.childSpatialIndex.hitTestRecursive(node.getWorldMatrix(), worldPos);
@@ -367,24 +409,8 @@ export class InteractionManager {
 
         // 2. 检测当前节点
         if (node.interactive && node !== this.scene) {
-            // 使用 AABB 包围盒进行快速初步检测
-            const bounds = node.getBounds(false);
-            if (bounds && 
-                worldPos[0] >= bounds.x && worldPos[0] <= bounds.x + bounds.width &&
-                worldPos[1] >= bounds.y && worldPos[1] <= bounds.y + bounds.height) {
-
-                // 进一步精确检测：将世界坐标转换到节点的局部坐标系
-                const localPos = this._tempVec2a;
-                const invertWorld = this._tempMat3a;
-                if (mat3.invert(invertWorld, node.getWorldMatrix())) {
-                    vec2.transformMat3(localPos, worldPos, invertWorld);
-
-                    // 检查是否在节点的矩形范围内 (0, 0) 到 (width, height)
-                    if (localPos[0] >= 0 && localPos[0] <= node.width &&
-                        localPos[1] >= 0 && localPos[1] <= node.height) {
-                        return node;
-                    }
-                }
+            if (node.hitTest(worldPos)) {
+                return node;
             }
         }
 
@@ -417,12 +443,14 @@ export class InteractionManager {
     /**
      * 检测鼠标是否在手柄上
      */
-    private hitTestHandles(pos: vec2): { node: Node, handle: any } | null {
+    private hitTestHandles(pos: vec2): { node: Node, handle: Handle } | null {
         if (this.auxLayer.selectedNodes.size !== 1) return null;
 
         const node = this.auxLayer.selectedNode!;
+        if (node.locked) return null;
+
         const handles = this.auxLayer.getHandles(node, this.renderer.getViewMatrix());
-        const size = (this.auxLayer.constructor as any).HANDLE_SIZE || 8;
+        const size = AuxiliaryLayer.HANDLE_SIZE || 8;
 
         for (const handle of handles) {
             if (pos[0] >= handle.x - size && pos[0] <= handle.x + size &&
@@ -793,7 +821,9 @@ export class InteractionManager {
         if (handleHit) {
             const node = handleHit.node;
             this.auxLayer.activeHandle = handleHit.handle.type;
-            this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
+            const parent = node.parent;
+            const index = parent ? parent.children.indexOf(node) : -1;
+            this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index });
 
             // 如果是旋转手柄，计算并记录中心点作为旋转中心
             const type = handleHit.handle.type;
@@ -818,7 +848,9 @@ export class InteractionManager {
                     this.auxLayer.selectedNodes.add(hit);
                     this.auxLayer.draggingNode = hit;
                     vec2.copy(this.auxLayer.dragProxyPos, worldPos);
-                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
+                    const parent = hit.parent;
+                    const index = parent ? parent.children.indexOf(hit) : -1;
+                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation, parent, index });
                 }
                 if (this.onSelectionChange) this.onSelectionChange();
             } else {
@@ -829,7 +861,9 @@ export class InteractionManager {
 
                     // 记录所有选中节点的起始状态
                     this.auxLayer.selectedNodes.forEach(node => {
-                        this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation });
+                        const parent = node.parent;
+                        const index = parent ? parent.children.indexOf(node) : -1;
+                        this.dragStartNodesState.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index });
                     });
                 } else {
                     this.auxLayer.selectedNodes.clear();
@@ -837,7 +871,9 @@ export class InteractionManager {
                     this.auxLayer.draggingNode = hit;
                     vec2.copy(this.auxLayer.dragProxyPos, worldPos);
 
-                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation });
+                    const parent = hit.parent;
+                    const index = parent ? parent.children.indexOf(hit) : -1;
+                    this.dragStartNodesState.set(hit, { x: hit.x, y: hit.y, w: hit.width, h: hit.height, rotation: hit.rotation, parent, index });
                     if (this.onSelectionChange) this.onSelectionChange();
                 }
             }
@@ -1144,9 +1180,9 @@ export class InteractionManager {
                         width: newW + worldThreshold * 2,
                         height: newH + worldThreshold * 2
                     };
-                    siblings = parentNode.childSpatialIndex.search(queryRect).filter(c => c !== node && c.interactive);
+                    siblings = parentNode.childSpatialIndex.search(queryRect).filter((c: Node) => c !== node && c.interactive);
                 } else {
-                    siblings = parentNode.children.filter(c => c !== node && c.interactive);
+                    siblings = parentNode.children.filter((c: Node) => c !== node && c.interactive);
                 }
 
                 // Vertical snapping (for X changes)
@@ -1160,7 +1196,7 @@ export class InteractionManager {
                         const sBounds = sibling.getBounds(false);
                         if (!sBounds) continue;
 
-                        const sXLines = [sBounds.x, (sBounds.x + sBounds.x + sBounds.width) / 2, sBounds.x + sBounds.width];
+                        const sXLines: number[] = [sBounds.x, sBounds.x + sBounds.width / 2, sBounds.x + sBounds.width];
                         for (let j = 0; j < 3; j++) {
                             if (Math.abs(worldXLine - sXLines[j]) < worldThreshold) {
                                 const deltaWorld = sXLines[j] - worldXLine;
@@ -1190,7 +1226,7 @@ export class InteractionManager {
                         const sBounds = sibling.getBounds(false);
                         if (!sBounds) continue;
 
-                        const sYLines = [sBounds.y, (sBounds.y + sBounds.y + sBounds.height) / 2, sBounds.y + sBounds.height];
+                        const sYLines: number[] = [sBounds.y, sBounds.y + sBounds.height / 2, sBounds.y + sBounds.height];
                         for (let j = 0; j < 3; j++) {
                             if (Math.abs(worldYLine - sYLines[j]) < worldThreshold) {
                                 const deltaWorld = sYLines[j] - worldYLine;
@@ -1270,6 +1306,7 @@ export class InteractionManager {
             const totalWorldDeltaX = worldPos[0] - this.dragStartMousePos[0];
             const totalWorldDeltaY = worldPos[1] - this.dragStartMousePos[1];
             for (const node of topLevelNodes) {
+                if (node.locked) continue;
                 const startState = this.dragStartNodesState.get(node);
                 if (!startState) continue;
 
@@ -1438,11 +1475,20 @@ export class InteractionManager {
                     this.creationNode.set(this.creationNode.x - defaultW / 2, this.creationNode.y - defaultH / 2, defaultW, defaultH);
                 }
 
+                // 记录创建命令到历史记录
+                if (this.creationNode.parent) {
+                    const parent = this.creationNode.parent;
+                    const index = parent.children.indexOf(this.creationNode);
+                    const command = new CreateCommand(this.creationNode, parent, index);
+                    this.engine.history.push(command);
+                }
+
                 // 创建完成后，默认选中新节点
                 this.auxLayer.selectedNodes.clear();
                 this.auxLayer.selectedNodes.add(this.creationNode);
                 this.creationNode = null;
                 if (this.onSelectionChange) this.onSelectionChange();
+                if (this.onStructureChange) this.onStructureChange();
             }
             this.engine.activeTool = null; // 重置激活的工具
             this.auxLayer.dragTargetNode = null; // 清除容器高亮
@@ -1451,6 +1497,29 @@ export class InteractionManager {
         }
 
         if (this.auxLayer.activeHandle) {
+            // 记录缩放/旋转命令
+            if (this.auxLayer.selectedNode) {
+                const node = this.auxLayer.selectedNode;
+                const oldState = this.dragStartNodesState.get(node);
+                if (oldState) {
+                    // 检查是否真的发生了变化
+                    if (oldState.x !== node.x || oldState.y !== node.y || 
+                        oldState.w !== node.width || oldState.h !== node.height || 
+                        oldState.rotation !== node.rotation) {
+                        
+                        const parent = node.parent;
+                        const index = parent ? parent.children.indexOf(node) : -1;
+                        const newState = { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index };
+                        const command = new TransformCommand(
+                            [node],
+                            new Map([[node, oldState]]),
+                            new Map([[node, newState]])
+                        );
+                        this.engine.history.push(command);
+                    }
+                }
+            }
+
             this.auxLayer.activeHandle = null;
             this.auxLayer.alignmentLines = [];
             this.renderer.ctx.canvas.style.cursor = 'default';
@@ -1469,20 +1538,18 @@ export class InteractionManager {
         if (this.auxLayer.draggingNode) {
             this.auxLayer.alignmentLines = [];
             const target = this.auxLayer.dragTargetNode;
+            const topLevelNodes = this.getTopLevelSelectedNodes();
+            
             if (target) {
-                const topLevelNodes = this.getTopLevelSelectedNodes();
-
-                // 开启批量模式，避免重挂载过程中反复更新空间索引
-                if (this.renderer) this.renderer.markStructureDirty();
-
+                // 开启批量模式，通过 silent=true 避免重挂载过程中反复更新空间索引
                 for (const draggingNode of topLevelNodes) {
                     // 1. 记录当前的世界坐标
                     const worldPos = this._tempVec2a;
                     const wm = draggingNode.getWorldMatrix(); // 确保获取的是最新的
                     vec2.set(worldPos, wm[6], wm[7]);
 
-                    // 2. 改变层级
-                    target.addChild(draggingNode);
+                    // 2. 改变层级 (使用静默模式)
+                    target.addChild(draggingNode, true);
 
                     // 3. 根据新的父节点计算新的局部坐标，保持世界位置不变
                     const invertParent = this._tempMat3a;
@@ -1494,8 +1561,42 @@ export class InteractionManager {
                     draggingNode.setTransform(newLocal[0], newLocal[1], draggingNode.scaleX, draggingNode.scaleY);
                 }
 
+                // 手动触发一次结构变化标记和空间索引更新
+                if (target.childSpatialIndex) {
+                    target.childSpatialIndex.load(topLevelNodes);
+                }
+                target.invalidate();
+                if (this.renderer) this.renderer.markStructureDirty();
+
                 if (this.onStructureChange) this.onStructureChange();
             }
+
+            // 记录拖拽/重挂载命令
+            const nodesWithChanges: Node[] = [];
+            const oldStates = new Map();
+            const newStates = new Map();
+
+            for (const node of topLevelNodes) {
+                const oldState = this.dragStartNodesState.get(node);
+                if (oldState) {
+                    if (oldState.x !== node.x || oldState.y !== node.y || 
+                        oldState.parent !== node.parent || 
+                        (node.parent && node.parent.children.indexOf(node) !== oldState.index)) {
+                        nodesWithChanges.push(node);
+                        oldStates.set(node, oldState);
+                        const parent = node.parent;
+                        const index = parent ? parent.children.indexOf(node) : -1;
+                        newStates.set(node, { x: node.x, y: node.y, w: node.width, h: node.height, rotation: node.rotation, parent, index });
+                    }
+                }
+            }
+
+            if (nodesWithChanges.length > 0) {
+                const command = new TransformCommand(nodesWithChanges, oldStates, newStates);
+                this.engine.history.push(command);
+                if (this.onTransformChange) this.onTransformChange();
+            }
+
             this.auxLayer.draggingNode = null;
             this.auxLayer.dragTargetNode = null;
             this.dragStartNodesState.clear();

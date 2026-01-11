@@ -1,9 +1,9 @@
 import { mat3, vec2 } from 'gl-matrix';
-import { Transform } from '../core/Transform';
-import { Renderer } from '../core/Renderer';
-import type { IRenderer } from '../core/IRenderer';
-import type { Rect } from '../core/Rect';
-import { MatrixSpatialIndex } from '../core/MatrixSpatialIndex';
+import { Transform } from '../math/Transform';
+import { Renderer } from '../rendering/Renderer';
+import type { IRenderer } from '../rendering/IRenderer';
+import type { Rect } from '../math/Rect';
+import { MatrixSpatialIndex } from './MatrixSpatialIndex';
 import type { NodeStyle, NodeEffects } from './Effects';
 
 /**
@@ -17,7 +17,7 @@ export class Node {
     public readonly id = Node._nextId++;
 
     /** 变换组件 (位置、旋转、缩放) */
-    public transform: Transform = new Transform(this.id);
+    public transform: Transform = new Transform();
 
     /** 子节点列表 (延迟初始化) */
     private _children: Node[] | null = null;
@@ -140,8 +140,10 @@ export class Node {
 
     public get locked(): boolean { return (this._flags & Node.BIT_LOCKED) !== 0; }
     public set locked(v: boolean) { 
+        if (this.locked === v) return;
         if (v) this._flags |= Node.BIT_LOCKED; 
         else this._flags &= ~Node.BIT_LOCKED; 
+        this.invalidate();
     }
 
     public get visible(): boolean { return (this._flags & Node.BIT_VISIBLE) !== 0; }
@@ -171,9 +173,20 @@ export class Node {
     public name?: string;
 
     /** 样式配置 (矩形、背景、圆角等) */
-    public style: NodeStyle = {};
+    private _style: NodeStyle = {};
+    public get style(): NodeStyle { return this._style; }
+    public set style(value: NodeStyle) {
+        this._style = { ...this._style, ...value };
+        this.invalidate();
+    }
+
     /** 效果配置 (阴影、模糊等) */
-    public effects: NodeEffects = {};
+    private _effects: NodeEffects = {};
+    public get effects(): NodeEffects { return this._effects; }
+    public set effects(value: NodeEffects) {
+        this._effects = { ...this._effects, ...value };
+        this.invalidate();
+    }
 
     /** 
      * 遍历节点树
@@ -410,35 +423,74 @@ export class Node {
 
     /**
      * 添加子节点
+     * @param child 子节点
+     * @param indexOrSilent 插入位置 (number) 或 是否静默添加 (boolean, 不触发 invalidate 和空间索引更新)
      */
-    addChild(child: Node, first: boolean = false) {
-        if (child.parent === this) return;
+    addChild(child: Node, indexOrSilent: number | boolean = -1) {
+        const index = typeof indexOrSilent === 'number' ? indexOrSilent : -1;
+        const silent = typeof indexOrSilent === 'boolean' ? indexOrSilent : false;
+
+        if (child.parent === this && index === -1) return;
+        
         if (child.parent) {
             child.parent.removeChild(child);
         }
 
         child.parent = this;
-        this.children.push(child);
+        
+        if (index === -1 || index >= this.children.length) {
+            this.children.push(child);
+        } else {
+            this.children.splice(index, 0, child);
+        }
 
-        // 延迟初始化空间索引
-        if (!this.childSpatialIndex) {
-            this.childSpatialIndex = new MatrixSpatialIndex();
-            // 如果已经有其他子节点，也需要加入索引
-            for (const c of this.children) {
-                this.childSpatialIndex.update(c);
+        if (!silent) {
+            // 延迟初始化空间索引
+            if (!this.childSpatialIndex) {
+                this.childSpatialIndex = new MatrixSpatialIndex();
+                // 使用 load 批量初始化，比逐个 update 快得多
+                this.childSpatialIndex.load(this.children);
+            } else {
+                this.childSpatialIndex.update(child);
+            }
+
+            child.spatialDirty = true;
+            this.invalidate();
+
+            if (Renderer.instance) {
+                Renderer.instance.markStructureDirty();
             }
         } else {
-            this.childSpatialIndex.update(child);
+            // 静默模式下只标记 dirty，不更新索引，不 invalidate
+            child.spatialDirty = true;
+        }
+    }
+
+    /**
+     * 批量添加子节点
+     * @param children 子节点列表
+     * @param silent 是否静默添加
+     */
+    addChildren(children: Node[], silent: boolean = false) {
+        for (const child of children) {
+            if (child.parent) {
+                child.parent.removeChild(child);
+            }
+            child.parent = this;
+            this.children.push(child);
+            child.spatialDirty = true;
         }
 
-        child.spatialDirty = true;
-
-        if (!first) {
+        if (!silent) {
+            if (!this.childSpatialIndex) {
+                this.childSpatialIndex = new MatrixSpatialIndex();
+            }
+            this.childSpatialIndex.load(children);
+            
             this.invalidate();
-        }
-
-        if (Renderer.instance) {
-            Renderer.instance.markStructureDirty();
+            if (Renderer.instance) {
+                Renderer.instance.markStructureDirty();
+            }
         }
     }
 
@@ -509,24 +561,30 @@ export class Node {
      * WebGL 渲染方法
      * 基类处理背景样式和效果
      * @param renderer 渲染器实例
+     * @param dirtyRect 当前渲染的脏矩形 (可选)
      */
-    renderWebGL(renderer: IRenderer) {
+    renderWebGL(renderer: IRenderer, _dirtyRect?: Rect) {
         // 优化：仅在确实有样式或效果且具有可见性时才触发特效渲染
         const style = this.style;
         const hasBg = style.backgroundColor && style.backgroundColor[3] > 0;
         const hasBorder = style.borderWidth && style.borderWidth > 0 && style.borderColor && style.borderColor[3] > 0;
-        const hasNodeColor = (this as any).color && (this as any).color[3] > 0;
         
-        const hasVisibleStyle = hasBg || hasBorder || hasNodeColor;
+        const hasVisibleStyle = hasBg || hasBorder;
         const hasEffects = (this.effects.outerShadow && this.effects.outerShadow.color[3] > 0) ||
                            (this.effects.innerShadow && this.effects.innerShadow.color[3] > 0) ||
                            (this.effects.backgroundBlur && this.effects.backgroundBlur > 0);
         
         if (this.width > 0 && this.height > 0 && (hasVisibleStyle || hasEffects)) {
-            if ('drawRectWithEffects' in renderer && typeof (renderer as any).drawRectWithEffects === 'function') {
-                (renderer as any).drawRectWithEffects(this);
-            }
+            renderer.drawRectWithEffects(this);
         }
+    }
+
+    /**
+     * Canvas 2D 渲染方法 (降级或特殊层使用)
+     * @param _renderer 渲染器实例
+     */
+    renderCanvas(_renderer: IRenderer) {
+        // 默认不实现，子类按需覆盖
     }
 
     /**

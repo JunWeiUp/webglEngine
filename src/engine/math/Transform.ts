@@ -1,4 +1,4 @@
-import { mat3, vec2 } from 'gl-matrix';
+import { mat3 } from 'gl-matrix';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class Transform {
@@ -41,11 +41,8 @@ export class Transform {
     // 缓存父矩阵版本号，避免不必要的更新
     public parentVersion: number = -1;
     public version: number = 0;
-
-    private ownerId: number;
-
-    constructor(ownerId: number = -1) {
-        this.ownerId = ownerId;
+ 
+    constructor() {
     }
 
     // Setters that trigger dirty flag

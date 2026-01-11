@@ -1,5 +1,4 @@
-import { Engine } from '../Engine';
-import { Node } from '../display/Node';
+import { Engine } from '../system/Engine';
 
 export class Toolbar {
     private container: HTMLElement;

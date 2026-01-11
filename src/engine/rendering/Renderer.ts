@@ -1,10 +1,10 @@
-import { Node } from '../display/Node';
-import { mat3, vec2 } from 'gl-matrix';
-import type { Rect } from './Rect';
+import { Node } from '../scene/Node';
+import { mat3 } from 'gl-matrix';
+import { TextureManager } from './TextureManager';
+import type { Rect } from '../math/Rect';
 import type { IRenderer } from './IRenderer';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
-import { MatrixSpatialIndex } from './MatrixSpatialIndex';
-import type { Engine } from '../Engine';
+import type { Engine } from '../system/Engine';
 import { rectVertexShader, rectFragmentShader } from './shaders';
 
 /**
@@ -73,22 +73,13 @@ export class Renderer implements IRenderer {
 
     // 矩阵栈，用于在遍历过程中维护当前的变换
     private matrixStack: mat3[] = [];
-    private matrixStackIndex: number = 0;
     private static readonly MAX_STACK_DEPTH = 32;
-
-    // 缓存用于剔除计算的临时变量
-    private _tempVec2_0 = vec2.create();
-    private _tempVec2_1 = vec2.create();
-    private _tempVec2_2 = vec2.create();
-    private _tempVec2_3 = vec2.create();
 
     /** 当前帧序号 */
     private _frameCount: number = 0;
     /** FPS 统计上次更新时间 */
     private lastFPSUpdateTime: number = 0;
-    private _isBatchUpdatingSpatial: boolean = false;
     private _structureDirty: boolean = true;
-    private _dirtyNodes: Node[] = []; // 用于 RBush 批量加载
     private _nodesByOrder: Node[] = []; // 用于超大规模场景的快速排序渲染
     private _visibleBitset: Uint8Array = new Uint8Array(0); // 用于大规模场景的快速排序
     
@@ -258,6 +249,9 @@ void main() {
 
         this.shaderProgram = this.createProgram(gl, vs, fs);
         gl.useProgram(this.shaderProgram);
+
+        // 初始化基础纹理
+        TextureManager.createWhiteTexture(gl);
 
         // 启用 Alpha 混合
         gl.enable(gl.BLEND);
@@ -510,7 +504,7 @@ void main() {
         }
         setUniform1f("u_padding", padding);
 
-        const bgColor = node.style.backgroundColor || (node as any).color || [0, 0, 0, 0];
+        const bgColor = node.style.backgroundColor || [0, 0, 0, 0];
         setUniform4f("u_backgroundColor", bgColor[0], bgColor[1], bgColor[2], bgColor[3]);
 
         // 圆角 (TL, TR, BR, BL)
@@ -765,9 +759,9 @@ void main() {
             for (let i = 0; i < totalNodes; i++) {
                 if (this._visibleBitset[i] === 1) {
                     const node = this._nodesByOrder[i];
-                    if (node && 'renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
+                    if (node) {
                         this.applyClips(node);
-                        (node as any).renderWebGL(this, dirtyRect);
+                        node.renderWebGL(this, dirtyRect);
                     }
                 }
             }
@@ -780,10 +774,8 @@ void main() {
             visibleNodes.sort((a, b) => a.renderOrder - b.renderOrder);
             for (let i = 0; i < visibleCount; i++) {
                 const node = visibleNodes[i];
-                if ('renderWebGL' in node && typeof (node as any).renderWebGL === 'function') {
-                    this.applyClips(node);
-                    (node as any).renderWebGL(this, dirtyRect);
-                }
+                this.applyClips(node);
+                node.renderWebGL(this, dirtyRect);
             }
             // 清理剩余的裁剪
             while (this._clipStack.length > 0) {
@@ -823,9 +815,7 @@ void main() {
 
         // 3. 渲染
         for (const node of visibleNodes) {
-            if ('renderCanvas' in node && typeof (node as any).renderCanvas === 'function') {
-                (node as any).renderCanvas(this);
-            }
+            node.renderCanvas(this);
         }
 
         this.stats.times.canvas2D = performance.now() - c0;

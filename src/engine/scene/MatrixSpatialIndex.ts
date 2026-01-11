@@ -1,6 +1,6 @@
 import { mat3, vec2 } from 'gl-matrix';
-import { Node } from '../display/Node';
-import type { Rect } from './Rect';
+import { Node } from './Node';
+import type { Rect } from '../math/Rect';
 import RBush from 'rbush';
 
 /**
@@ -52,14 +52,11 @@ export class MatrixSpatialIndex {
     public update(node: Node) {
         this.remove(node.id);
 
-        // 确保局部变换矩阵是最新的
         node.transform.updateLocalTransform();
-        
         const localMatrix = node.transform.localMatrix;
         const w = node.width;
         const h = node.height;
 
-        // 计算节点在父节点局部空间下的 4 个顶点
         const corners = this._tempVecs;
         vec2.set(corners[0], 0, 0);
         vec2.set(corners[1], w, 0);
@@ -77,16 +74,55 @@ export class MatrixSpatialIndex {
             if (y > maxY) maxY = y;
         }
 
-        const item: MatrixSpatialItem = {
-            minX,
-            minY,
-            maxX,
-            maxY,
-            node
-        };
-
+        const item: MatrixSpatialItem = { minX, minY, maxX, maxY, node };
         this.items.set(node.id, item);
         this.rbush.insert(item);
+    }
+
+    /**
+     * 批量更新节点
+     * @param nodes 节点列表
+     */
+    public load(nodes: Node[]) {
+        const newItems: MatrixSpatialItem[] = [];
+        for (const node of nodes) {
+            node.transform.updateLocalTransform();
+            const localMatrix = node.transform.localMatrix;
+            const w = node.width;
+            const h = node.height;
+
+            const corners = [
+                vec2.create(), vec2.create(), vec2.create(), vec2.create()
+            ];
+            vec2.set(corners[0], 0, 0);
+            vec2.set(corners[1], w, 0);
+            vec2.set(corners[2], w, h);
+            vec2.set(corners[3], 0, h);
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (let i = 0; i < 4; i++) {
+                vec2.transformMat3(corners[i], corners[i], localMatrix);
+                const x = corners[i][0];
+                const y = corners[i][1];
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+
+            const item: MatrixSpatialItem = { minX, minY, maxX, maxY, node };
+            this.items.set(node.id, item);
+            newItems.push(item);
+        }
+        this.rbush.load(newItems);
+    }
+
+    /**
+     * 清空索引
+     */
+    public clear() {
+        this.rbush.clear();
+        this.items.clear();
     }
 
     /**
@@ -160,6 +196,10 @@ export class MatrixSpatialIndex {
 
         for (const item of results) {
             const node = item.node;
+            
+            // 如果节点不可见，跳过它及其所有子节点
+            if (!node.visible) continue;
+
             outResult.push(node);
 
             // 5. 如果子节点也有索引，递归查询
@@ -208,6 +248,9 @@ export class MatrixSpatialIndex {
         for (const item of results) {
             const node = item.node;
 
+            // 如果节点不可见或已锁定，跳过拾取
+            if (!node.visible || node.locked) continue;
+
             // 递归检测子节点的索引 (子节点永远在父节点之上)
             if (node.childSpatialIndex) {
                 const hit = node.childSpatialIndex.hitTestRecursive(node.getWorldMatrix(), worldPos);
@@ -230,13 +273,5 @@ export class MatrixSpatialIndex {
         }
 
         return null;
-    }
-
-    /**
-     * 清空索引
-     */
-    public clear() {
-        this.rbush.clear();
-        this.items.clear();
     }
 }

@@ -1,10 +1,10 @@
 import './style.css'
-import { Engine } from './engine/Engine';
-import { Node } from './engine/display/Node';
-import { TileLayer } from './engine/display/TileLayer';
-import { Sprite } from './engine/display/Sprite';
-import { Text } from './engine/display/Text';
-import { Container } from './engine/display/Container';
+import { Engine } from './engine/system/Engine';
+import { Node } from './engine/scene/Node';
+import { TileLayer } from './engine/scene/TileLayer';
+import { Sprite } from './engine/scene/Sprite';
+import { Text } from './engine/scene/Text';
+import { Container } from './engine/scene/Container';
 import { MemoryTracker } from './engine/utils/MemoryProfiler';
 import { vec2, mat3 } from 'gl-matrix';
 
@@ -104,6 +104,7 @@ let currentRow = 0;
 function loadBatch() {
     const startRow = currentRow;
     const endRow = Math.min(currentRow + batchSize, totalRows);
+    const batchContainers: Node[] = [];
 
     for (let i = startRow; i < endRow; i++) {
         for (let j = 0; j < totalCols; j++) {
@@ -111,31 +112,28 @@ function loadBatch() {
             container.name = "MyContainer";
             container.setPosition(500 * i, 500 * j);
             container.interactive = true;
-            // container.width = 400;
-            // container.height = 400;
             container.set(container.x, container.y, 400, 400);
 
             container.color = new Float32Array([Math.random(), Math.random(), Math.random(), 0.5]);
 
-
             container.style = {
-            // backgroundColor: [1, 1, 1, 1],
-            borderRadius: [11,3,44,155],
-            borderColor: [0, 0, 0, 1],
-            borderWidth: 4
-             };
-             container.effects={
-                backgroundBlur:2,
-               outerShadow: {
-                color: [0.1, 0.3, 0.4, 0.5],
-                blur: 10,
-                offsetX: 5,
-                offsetY: 5,
-                spread: 2
+                borderRadius: [11, 3, 44, 155],
+                borderColor: [0, 0, 0, 1],
+                borderWidth: 4
+            };
+            container.effects = {
+                backgroundBlur: 2,
+                outerShadow: {
+                    color: [0.1, 0.3, 0.4, 0.5],
+                    blur: 10,
+                    offsetX: 5,
+                    offsetY: 5,
+                    spread: 2
+                }
             }
-             }
-            // 最后一个参数 true 表示不立即触发 invalidate，等到一批完成后统一触发
-            engine.scene.addChild(container, true);
+
+            // 收集子节点批量添加
+            const children: Node[] = [];
 
             // 3. Add Sprites with generated images
             const sprite1 = new Sprite(engine.renderer.gl, sprite1Url);
@@ -143,28 +141,35 @@ function loadBatch() {
             sprite1.width = 100;
             sprite1.height = 100;
             sprite1.interactive = true;
-            sprite1.name = "Sprite"+i+"_"+j;
-            container.addChild(sprite1, true);
+            sprite1.name = "Sprite" + i + "_" + j;
+            children.push(sprite1);
 
             const sprite2 = new Sprite(engine.renderer.gl, sprite2Url);
             sprite2.setPosition(200, 50);
             sprite2.width = 100;
             sprite2.height = 100;
-
             sprite2.interactive = true;
-            sprite2.name = "Sprite"+i+"_"+j;    
-            container.addChild(sprite2, true);
+            sprite2.name = "Sprite" + i + "_" + j;
+            children.push(sprite2);
 
             // 4. Add Text (Canvas2D)
-            const text = new Text("HelloText "+i+"_"+j);
+            const text = new Text("HelloText " + i + "_" + j);
             text.setPosition(50, 200);
             text.fontSize = 30;
             text.fillStyle = "red";
             text.interactive = true;
-            text.name = "HelloText"+i+"_"+j;
-            container.addChild(text, true);
+            text.name = "HelloText" + i + "_" + j;
+            children.push(text);
+
+            // 批量给 container 添加子节点
+            container.addChildren(children);
+            
+            batchContainers.push(container);
         }
     }
+
+    // 批量给场景添加容器
+    engine.scene.addChildren(batchContainers);
 
     currentRow = endRow;
 

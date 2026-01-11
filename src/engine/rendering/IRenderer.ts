@@ -1,6 +1,14 @@
-import { mat3 } from 'gl-matrix';
-import type { Rect } from './Rect';
-import type { Node } from '../display/Node';
+import type { mat3 } from 'gl-matrix';
+import type { Node } from '../scene/Node';
+
+import type { Rect } from '../math/Rect';
+
+/**
+ * 可渲染对象接口
+ */
+export interface IRenderable {
+    renderWebGL(renderer: IRenderer, dirtyRect?: Rect): void;
+}
 
 export interface IRenderer {
     gl: WebGL2RenderingContext;

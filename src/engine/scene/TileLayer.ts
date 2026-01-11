@@ -1,8 +1,8 @@
 import { Node } from './Node';
-import type { IRenderer } from '../core/IRenderer';
-import { Renderer } from '../core/Renderer';
-import type { Rect } from '../core/Rect';
-import { TextureManager } from '../utils/TextureManager';
+import type { IRenderer } from '../rendering/IRenderer';
+import { Renderer } from '../rendering/Renderer';
+import type { Rect } from '../math/Rect';
+import { TextureManager } from '../rendering/TextureManager';
 import { mat3, vec2 } from 'gl-matrix';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
@@ -33,7 +33,6 @@ export class TileLayer extends Node {
 
     // --- 预分配临时变量 (GC 优化) ---
     private static _tempVec2a = vec2.create();
-    private static _tempVec2b = vec2.create();
     private static _tempMat3a = mat3.create();
     private static _tempMat3b = mat3.create();
     private static _tempCorners = [vec2.create(), vec2.create(), vec2.create(), vec2.create()];

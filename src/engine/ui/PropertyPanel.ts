@@ -1,4 +1,6 @@
-import { Node } from '../display/Node';
+import { Node } from '../scene/Node';
+import { PropertyCommand } from '../history/Command';
+import type { Engine } from '../system/Engine';
 
 /**
  * 属性面板 (Property Panel)
@@ -6,6 +8,7 @@ import { Node } from '../display/Node';
  * 模仿 Figma 的属性栏，用于显示和编辑选中节点的属性。
  */
 export class PropertyPanel {
+    private engine: Engine;
     private container: HTMLElement;
 
     private selectedNodes: Set<Node> = new Set();
@@ -15,7 +18,8 @@ export class PropertyPanel {
 
     public onPropertyChange: (() => void) | null = null;
 
-    constructor() {
+    constructor(engine: Engine) {
+        this.engine = engine;
         this.container = document.createElement('div');
         this.initStyles();
         this.initLayout();
@@ -109,7 +113,16 @@ export class PropertyPanel {
 
     private alignNodes(type: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom' | 'dist-h' | 'dist-v') {
         if (this.selectedNodes.size === 0) return;
-        const nodes = Array.from(this.selectedNodes);
+        const nodes = Array.from(this.selectedNodes).filter(n => !n.locked);
+        if (nodes.length === 0) return;
+
+        // Record initial states for X and Y
+        const startXStates = new Map<Node, number>();
+        const startYStates = new Map<Node, number>();
+        nodes.forEach(node => {
+            startXStates.set(node, node.x);
+            startYStates.set(node, node.y);
+        });
 
         if (nodes.length === 1) {
             // Align to parent if only one node selected
@@ -178,6 +191,28 @@ export class PropertyPanel {
                     }
                 });
             }
+        }
+
+        // Record end states and push to history
+        const endXStates = new Map<Node, number>();
+        const endYStates = new Map<Node, number>();
+        let xChanged = false;
+        let yChanged = false;
+
+        nodes.forEach(node => {
+            endXStates.set(node, node.x);
+            endYStates.set(node, node.y);
+            if (node.x !== startXStates.get(node)) xChanged = true;
+            if (node.y !== startYStates.get(node)) yChanged = true;
+        });
+
+        if (xChanged) {
+            const command = new PropertyCommand(nodes, 'x', startXStates, endXStates, (node, val) => node.setPosition(val, node.y));
+            this.engine.history.push(command);
+        }
+        if (yChanged) {
+            const command = new PropertyCommand(nodes, 'y', startYStates, endYStates, (node, val) => node.setPosition(node.x, val));
+            this.engine.history.push(command);
         }
 
         if (this.onPropertyChange) this.onPropertyChange();
@@ -340,7 +375,7 @@ export class PropertyPanel {
         });
 
         select.addEventListener('change', () => {
-            this.applyConstraintChange(key, select.value);
+            this.applyChange(key, select.value, 'text');
             this.syncFromNodes();
         });
 
@@ -348,21 +383,6 @@ export class PropertyPanel {
         this.fields[key] = select as any;
 
         return container;
-    }
-
-    private applyConstraintChange(keyPath: string, value: string) {
-        if (this.selectedNodes.size === 0) return;
-        const [, propKey] = keyPath.split('.');
-        
-        this.selectedNodes.forEach(node => {
-            if (!node.style.constraints) {
-                node.style.constraints = { horizontal: 'min', vertical: 'min' };
-            }
-            (node.style.constraints as any)[propKey] = value;
-            node.invalidate();
-        });
-
-        if (this.onPropertyChange) this.onPropertyChange();
     }
 
     private refreshConstraintVisuals(box: HTMLElement, h: string, v: string) {
@@ -411,10 +431,34 @@ export class PropertyPanel {
 
         // Selection Section
         const nameSection = this.createSection('Selection');
+        const selectionGrid = (nameSection as any).grid;
+        
+        // Name field
         const nameFieldContainer = this.addPropertyField(nameSection, 'Name', 'name', 'text');
         if (nameFieldContainer) {
             nameFieldContainer.style.gridColumn = '1 / -1';
         }
+
+        // Lock and Visibility toggles
+        const statesContainer = document.createElement('div');
+        Object.assign(statesContainer.style, {
+            gridColumn: '1 / -1',
+            display: 'flex',
+            gap: '8px',
+            marginTop: '4px'
+        });
+
+        this.addToggleButton(statesContainer, 'Locked', 'locked', 
+            '<path d="M3.5 5V4C3.5 2.61929 4.61929 1.5 6 1.5C7.38071 1.5 8.5 2.61929 8.5 4V5M3.5 5H2.5V9.5H9.5V5H8.5M3.5 5H8.5V7.5H3.5V5Z" fill="currentColor"/>',
+            '<path d="M3.5 5V4C3.5 2.61929 4.61929 1.5 6 1.5C7.38071 1.5 8.5 2.61929 8.5 4V5M3.5 5H2.5V9.5H9.5V5H8.5M3.5 5H8.5V7.5H3.5V5Z" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>'
+        );
+        
+        this.addToggleButton(statesContainer, 'Visible', 'visible',
+            '<path d="M1.5 6C1.5 6 3.5 2.5 6 2.5C8.5 2.5 10.5 6 10.5 6C10.5 6 8.5 9.5 6 9.5C3.5 9.5 1.5 6 1.5 6Z" stroke="currentColor" stroke-width="1"/><circle cx="6" cy="6" r="1.5" stroke="currentColor" stroke-width="1"/>',
+            '<path d="M10 2L2 10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M1.5 6C1.5 6 3.5 2.5 6 2.5C8.5 2.5 10.5 6 10.5 6C10.5 6 8.5 9.5 6 9.5C3.5 9.5 1.5 6 1.5 6Z" stroke="currentColor" stroke-width="1" stroke-opacity="0.3"/><circle cx="6" cy="6" r="1.5" stroke="currentColor" stroke-width="1" stroke-opacity="0.3"/>'
+        );
+
+        selectionGrid.appendChild(statesContainer);
         
         // Text Content Section (hidden by default)
         const textContentContainer = document.createElement('div');
@@ -796,12 +840,23 @@ export class PropertyPanel {
         let isDragging = false;
         let startX = 0;
         let startVal = 0;
+        let dragStartStates = new Map<Node, any>();
+
         labelEl.addEventListener('mousedown', (e) => {
+            const nodesToApply = Array.from(this.selectedNodes).filter(n => !n.locked);
+            if (nodesToApply.length === 0) return;
+
             isDragging = true;
             startX = e.clientX;
             startVal = parseFloat(input.value) || 0;
             document.body.style.cursor = 'ew-resize';
             
+            // 记录初始状态
+            dragStartStates.clear();
+            nodesToApply.forEach(node => {
+                dragStartStates.set(node, this.getNodePropertyValue(node, key));
+            });
+
             const onMouseMove = (moveEvent: MouseEvent) => {
                 if (!isDragging) return;
                 let delta = moveEvent.clientX - startX;
@@ -812,10 +867,38 @@ export class PropertyPanel {
 
                 const newVal = startVal + delta;
                 input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
-                this.applyChange(key, input.value, 'number');
+                this.applyChange(key, input.value, 'number', false); // false 表示不记录历史
             };
 
             const onMouseUp = () => {
+                if (isDragging) {
+                    // 记录最终状态并存入历史
+                    const dragEndStates = new Map<Node, any>();
+                    nodesToApply.forEach(node => {
+                        dragEndStates.set(node, this.getNodePropertyValue(node, key));
+                    });
+
+                    // 检查是否真的发生了变化
+                    let changed = false;
+                    for (const [node, oldVal] of dragStartStates) {
+                        if (oldVal !== dragEndStates.get(node)) {
+                            changed = true;
+                            break;
+                        }
+                    }
+
+                    if (changed) {
+                        const command = new PropertyCommand(
+                            nodesToApply,
+                            key,
+                            dragStartStates,
+                            dragEndStates,
+                            (node, val) => this.setNodePropertyValue(node, key, val)
+                        );
+                        this.engine.history.push(command);
+                    }
+                }
+
                 isDragging = false;
                 document.body.style.cursor = 'default';
                 window.removeEventListener('mousemove', onMouseMove);
@@ -936,12 +1019,23 @@ export class PropertyPanel {
             let isDragging = false;
             let startX = 0;
             let startVal = 0;
+            let dragStartStates = new Map<Node, any>();
+
             label.addEventListener('mousedown', (e) => {
+                const nodesToApply = Array.from(this.selectedNodes).filter(n => !n.locked);
+                if (nodesToApply.length === 0) return;
+
                 isDragging = true;
                 startX = e.clientX;
                 startVal = parseFloat(input.value) || 0;
                 document.body.style.cursor = 'ew-resize';
                 
+                // 记录初始状态
+                dragStartStates.clear();
+                nodesToApply.forEach(node => {
+                    dragStartStates.set(node, this.getNodePropertyValue(node, config.key));
+                });
+
                 const onMouseMove = (moveEvent: MouseEvent) => {
                     if (!isDragging) return;
                     let delta = moveEvent.clientX - startX;
@@ -952,10 +1046,38 @@ export class PropertyPanel {
 
                     const newVal = startVal + delta;
                     input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
-                    this.applyChange(config.key, input.value, 'number');
+                    this.applyChange(config.key, input.value, 'number', false); // false 表示不记录历史
                 };
 
                 const onMouseUp = () => {
+                    if (isDragging) {
+                        // 记录最终状态并存入历史
+                        const dragEndStates = new Map<Node, any>();
+                        nodesToApply.forEach(node => {
+                            dragEndStates.set(node, this.getNodePropertyValue(node, config.key));
+                        });
+
+                        // 检查是否真的发生了变化
+                        let changed = false;
+                        for (const [node, oldVal] of dragStartStates) {
+                            if (oldVal !== dragEndStates.get(node)) {
+                                changed = true;
+                                break;
+                            }
+                        }
+
+                        if (changed) {
+                            const command = new PropertyCommand(
+                                nodesToApply,
+                                config.key,
+                                dragStartStates,
+                                dragEndStates,
+                                (node, val) => this.setNodePropertyValue(node, config.key, val)
+                            );
+                            this.engine.history.push(command);
+                        }
+                    }
+
                     isDragging = false;
                     document.body.style.cursor = 'default';
                     window.removeEventListener('mousemove', onMouseMove);
@@ -1096,6 +1218,69 @@ export class PropertyPanel {
             textTransform: 'uppercase'
         });
         return title;
+    }
+
+    private addToggleButton(parent: HTMLElement, label: string, key: string, activeIcon: string, inactiveIcon: string) {
+        const btn = document.createElement('div');
+        Object.assign(btn.style, {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '4px 8px',
+            borderRadius: '2px',
+            border: '1px solid var(--figma-border)',
+            cursor: 'pointer',
+            fontSize: '11px',
+            color: 'var(--figma-text-secondary)',
+            transition: 'background-color 0.1s, color 0.1s, border-color 0.1s'
+        });
+
+        const iconEl = document.createElement('div');
+        iconEl.style.display = 'flex';
+        iconEl.style.alignItems = 'center';
+        iconEl.style.justifyContent = 'center';
+        iconEl.style.width = '12px';
+        iconEl.style.height = '12px';
+        btn.appendChild(iconEl);
+
+        const labelEl = document.createElement('span');
+        labelEl.innerText = label;
+        btn.appendChild(labelEl);
+
+        const updateUI = (active: boolean) => {
+            iconEl.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">${active ? activeIcon : inactiveIcon}</svg>`;
+            if (active) {
+                btn.style.backgroundColor = 'var(--figma-active-bg)';
+                btn.style.color = 'var(--figma-text-primary)';
+                btn.style.borderColor = 'var(--figma-blue)';
+            } else {
+                btn.style.backgroundColor = 'transparent';
+                btn.style.color = 'var(--figma-text-secondary)';
+                btn.style.borderColor = 'var(--figma-border)';
+            }
+        };
+
+        btn.onclick = () => {
+            const currentVal = this.getNodePropertyValue(Array.from(this.selectedNodes)[0], key);
+            const newVal = !currentVal;
+            this.applyChange(key, newVal, 'boolean'); 
+            updateUI(newVal);
+            this.syncFromNodes();
+        };
+
+        btn.addEventListener('mouseenter', () => {
+            if (btn.style.backgroundColor === 'transparent') {
+                btn.style.backgroundColor = 'var(--figma-hover-bg)';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            const currentVal = this.getNodePropertyValue(Array.from(this.selectedNodes)[0], key);
+            updateUI(currentVal);
+        });
+
+        parent.appendChild(btn);
+        (this.fields as any)[key] = btn; // Store the button itself to update it in syncFromNodes
+        (btn as any).updateUI = updateUI;
     }
 
     private addSelectField(parent: HTMLElement, label: string, key: string, options: string[]) {
@@ -1431,6 +1616,7 @@ export class PropertyPanel {
             let isDragging = false;
             let startX = 0;
             let startVal = 0;
+            let dragStartStates = new Map<Node, any>();
 
             labelEl.addEventListener('mousedown', (e) => {
                 isDragging = true;
@@ -1438,6 +1624,12 @@ export class PropertyPanel {
                 startVal = parseFloat(input.value) || 0;
                 document.body.style.cursor = 'ew-resize';
                 
+                // 记录初始状态
+                dragStartStates.clear();
+                this.selectedNodes.forEach(node => {
+                    dragStartStates.set(node, this.getNodePropertyValue(node, key));
+                });
+
                 const onMouseMove = (moveEvent: MouseEvent) => {
                     if (!isDragging) return;
                     let delta = moveEvent.clientX - startX;
@@ -1448,10 +1640,38 @@ export class PropertyPanel {
 
                     const newVal = startVal + delta;
                     input.value = (moveEvent.altKey ? newVal.toFixed(1) : Math.round(newVal).toString());
-                    this.applyChange(key, input.value, 'number');
+                    this.applyChange(key, input.value, 'number', false); // false 表示不记录历史
                 };
 
                 const onMouseUp = () => {
+                    if (isDragging) {
+                        // 记录最终状态并存入历史
+                        const dragEndStates = new Map<Node, any>();
+                        this.selectedNodes.forEach(node => {
+                            dragEndStates.set(node, this.getNodePropertyValue(node, key));
+                        });
+
+                        // 检查是否真的发生了变化
+                        let changed = false;
+                        for (const [node, oldVal] of dragStartStates) {
+                            if (oldVal !== dragEndStates.get(node)) {
+                                changed = true;
+                                break;
+                            }
+                        }
+
+                        if (changed) {
+                            const command = new PropertyCommand(
+                                Array.from(this.selectedNodes),
+                                key,
+                                dragStartStates,
+                                dragEndStates,
+                                (node, val) => this.setNodePropertyValue(node, key, val)
+                            );
+                            this.engine.history.push(command);
+                        }
+                    }
+
                     isDragging = false;
                     document.body.style.cursor = 'default';
                     window.removeEventListener('mousemove', onMouseMove);
@@ -1490,6 +1710,237 @@ export class PropertyPanel {
         this.syncFromNodes();
     }
 
+    private getNodePropertyValue(node: Node, key: string): any {
+        switch (key) {
+            case 'name': return node.name;
+            case 'locked': return node.locked;
+            case 'visible': return node.visible;
+            case 'textContent': return (node as any).text || (node as any).content || '';
+            case 'textureUrl': return (node as any).textureUrl || '';
+            case 'x': return Math.round(node.x);
+            case 'y': return Math.round(node.y);
+            case 'width': return Math.round(node.width);
+            case 'height': return Math.round(node.height);
+            case 'rotation': return Math.round(node.transform.rotation * 180 / Math.PI);
+            case 'scaleX': return parseFloat(node.scaleX.toFixed(2));
+            case 'scaleY': return parseFloat(node.scaleY.toFixed(2));
+            case 'borderRadius': return Array.isArray(node.style.borderRadius) ? node.style.borderRadius[0] : (node.style.borderRadius || 0);
+            case 'borderRadiusTL': return Array.isArray(node.style.borderRadius) ? node.style.borderRadius[0] : (node.style.borderRadius || 0);
+            case 'borderRadiusTR': return Array.isArray(node.style.borderRadius) ? node.style.borderRadius[1] : (node.style.borderRadius || 0);
+            case 'borderRadiusBR': return Array.isArray(node.style.borderRadius) ? node.style.borderRadius[2] : (node.style.borderRadius || 0);
+            case 'borderRadiusBL': return Array.isArray(node.style.borderRadius) ? node.style.borderRadius[3] : (node.style.borderRadius || 0);
+            case 'backgroundColor': {
+                if ((node as any).color instanceof Float32Array) {
+                    const c = (node as any).color;
+                    return this.rgbaToHex([c[0], c[1], c[2], c[3]]);
+                }
+                if ((node as any).fillStyle !== undefined) return (node as any).fillStyle;
+                return this.rgbaToHex(node.style.backgroundColor || [1, 1, 1, 1]);
+            }
+            case 'backgroundColorOpacity': {
+                if ((node as any).color instanceof Float32Array) return (node as any).color[3];
+                return node.style.backgroundColor?.[3] ?? 1;
+            }
+            case 'borderWidth': return node.style.borderWidth || 0;
+            case 'borderColor': return this.rgbaToHex(node.style.borderColor || [0, 0, 0, 0]);
+            case 'strokeType': return node.style.strokeType || 'inner';
+            case 'strokeStyle': return node.style.strokeStyle || 'solid';
+            case 'strokeDash': return node.style.strokeDashArray?.[0] || 0;
+            case 'strokeGap': return node.style.strokeDashArray?.[1] || 0;
+            case 'layerBlur': return node.effects.layerBlur || 0;
+            case 'backgroundBlur': return node.effects.backgroundBlur || 0;
+            case 'outerShadowColor': return this.rgbaToHex(node.effects.outerShadow?.color || [0, 0, 0, 0]);
+            case 'outerShadowX': return node.effects.outerShadow?.offsetX || 0;
+            case 'outerShadowY': return node.effects.outerShadow?.offsetY || 0;
+            case 'outerShadowBlur': return node.effects.outerShadow?.blur || 0;
+            case 'outerShadowSpread': return node.effects.outerShadow?.spread || 0;
+            case 'innerShadowColor': return this.rgbaToHex(node.effects.innerShadow?.color || [0, 0, 0, 0]);
+            case 'innerShadowX': return node.effects.innerShadow?.offsetX || 0;
+            case 'innerShadowY': return node.effects.innerShadow?.offsetY || 0;
+            case 'innerShadowBlur': return node.effects.innerShadow?.blur || 0;
+            case 'innerShadowSpread': return node.effects.innerShadow?.spread || 0;
+            case 'constraints.horizontal': return node.style.constraints?.horizontal || 'min';
+            case 'constraints.vertical': return node.style.constraints?.vertical || 'min';
+            default: return 0;
+        }
+    }
+
+    private setNodePropertyValue(node: Node, key: string, value: any) {
+        if (key.startsWith('constraints.')) {
+            const [, propKey] = key.split('.');
+            if (!node.style.constraints) {
+                node.style.constraints = { horizontal: 'min', vertical: 'min' };
+            }
+            (node.style.constraints as any)[propKey] = value;
+            node.invalidate();
+            return;
+        }
+
+        // Handle boolean values for locked and visible
+        if (key === 'locked' || key === 'visible') {
+            (node as any)[key] = !!value;
+            return;
+        }
+
+        // Handle types (value is usually a string from input)
+        const num = parseFloat(value);
+        
+        switch (key) {
+            case 'name': node.name = value; break;
+            case 'textContent':
+                if ((node as any).text !== undefined) {
+                    (node as any).text = value;
+                    (node as any)._contentDirty = true;
+                } else if ((node as any).content !== undefined) {
+                    (node as any).content = value;
+                    (node as any)._contentDirty = true;
+                }
+                break;
+            case 'textureUrl':
+                if ((node as any).textureUrl !== undefined) {
+                    (node as any).textureUrl = value;
+                }
+                break;
+            case 'x': node.setPosition(num, node.y); break;
+            case 'y': node.setPosition(node.x, num); break;
+            case 'width': node.width = num; break;
+            case 'height': node.height = num; break;
+            case 'rotation': node.transform.rotation = num * Math.PI / 180; break;
+            case 'scaleX': node.setScale(num, node.scaleY); break;
+            case 'scaleY': node.setScale(node.scaleX, num); break;
+            case 'borderRadius': node.style = { borderRadius: num }; break;
+            case 'borderRadiusTL': {
+                const br = Array.isArray(node.style.borderRadius) ? [...node.style.borderRadius] : [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
+                br[0] = num;
+                node.style = { borderRadius: br as [number, number, number, number] };
+                break;
+            }
+            case 'borderRadiusTR': {
+                const br = Array.isArray(node.style.borderRadius) ? [...node.style.borderRadius] : [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
+                br[1] = num;
+                node.style = { borderRadius: br as [number, number, number, number] };
+                break;
+            }
+            case 'borderRadiusBR': {
+                const br = Array.isArray(node.style.borderRadius) ? [...node.style.borderRadius] : [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
+                br[2] = num;
+                node.style = { borderRadius: br as [number, number, number, number] };
+                break;
+            }
+            case 'borderRadiusBL': {
+                const br = Array.isArray(node.style.borderRadius) ? [...node.style.borderRadius] : [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
+                br[3] = num;
+                node.style = { borderRadius: br as [number, number, number, number] };
+                break;
+            }
+            case 'backgroundColor': {
+                const rgba = this.hexToRgba(value) || [1, 1, 1, 1];
+                // Preserve current opacity
+                const currentOpacity = this.getNodePropertyValue(node, 'backgroundColorOpacity');
+                rgba[3] = currentOpacity;
+                node.style = { backgroundColor: rgba };
+                if ((node as any).color instanceof Float32Array) (node as any).color = new Float32Array(rgba);
+                if ((node as any).fillStyle !== undefined) {
+                    (node as any).fillStyle = value;
+                    (node as any)._contentDirty = true;
+                }
+                break;
+            }
+            case 'backgroundColorOpacity': {
+                const rgba = [...(node.style.backgroundColor || [1, 1, 1, 1])] as [number, number, number, number];
+                rgba[3] = num;
+                node.style = { backgroundColor: rgba };
+                if ((node as any).color instanceof Float32Array) (node as any).color = new Float32Array(rgba);
+                break;
+            }
+            case 'borderWidth': node.style = { borderWidth: num }; break;
+            case 'borderColor': {
+                const rgba = this.hexToRgba(value) || [0, 0, 0, 1];
+                node.style = { borderColor: rgba };
+                break;
+            }
+            case 'strokeType': node.style.strokeType = value as any; break;
+            case 'strokeStyle': node.style.strokeStyle = value as any; break;
+            case 'strokeDash': {
+                const dash = node.style.strokeDashArray ? [...node.style.strokeDashArray] : [0, 0];
+                dash[0] = num;
+                node.style = { strokeDashArray: dash as [number, number] };
+                break;
+            }
+            case 'strokeGap': {
+                const dash = node.style.strokeDashArray ? [...node.style.strokeDashArray] : [0, 0];
+                dash[1] = num;
+                node.style = { strokeDashArray: dash as [number, number] };
+                break;
+            }
+            case 'layerBlur': node.effects = { layerBlur: num }; break;
+            case 'backgroundBlur': node.effects = { backgroundBlur: num }; break;
+            case 'outerShadowColor': {
+                const rgba = this.hexToRgba(value) || [0, 0, 0, 0.5];
+                const os = node.effects.outerShadow ? { ...node.effects.outerShadow } : { color: rgba, blur: 5, offsetX: 0, offsetY: 0 };
+                os.color = rgba;
+                node.effects = { outerShadow: os };
+                break;
+            }
+            case 'outerShadowX': {
+                const os = node.effects.outerShadow ? { ...node.effects.outerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                os.offsetX = num;
+                node.effects = { outerShadow: os };
+                break;
+            }
+            case 'outerShadowY': {
+                const os = node.effects.outerShadow ? { ...node.effects.outerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                os.offsetY = num;
+                node.effects = { outerShadow: os };
+                break;
+            }
+            case 'outerShadowBlur': {
+                const os = node.effects.outerShadow ? { ...node.effects.outerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                os.blur = num;
+                node.effects = { outerShadow: os };
+                break;
+            }
+            case 'outerShadowSpread': {
+                const os = node.effects.outerShadow ? { ...node.effects.outerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                os.spread = num;
+                node.effects = { outerShadow: os };
+                break;
+            }
+            case 'innerShadowColor': {
+                const rgba = this.hexToRgba(value) || [0, 0, 0, 0.5];
+                const is = node.effects.innerShadow ? { ...node.effects.innerShadow } : { color: rgba, blur: 5, offsetX: 0, offsetY: 0 };
+                is.color = rgba;
+                node.effects = { innerShadow: is };
+                break;
+            }
+            case 'innerShadowX': {
+                const is = node.effects.innerShadow ? { ...node.effects.innerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                is.offsetX = num;
+                node.effects = { innerShadow: is };
+                break;
+            }
+            case 'innerShadowY': {
+                const is = node.effects.innerShadow ? { ...node.effects.innerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                is.offsetY = num;
+                node.effects = { innerShadow: is };
+                break;
+            }
+            case 'innerShadowBlur': {
+                const is = node.effects.innerShadow ? { ...node.effects.innerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                is.blur = num;
+                node.effects = { innerShadow: is };
+                break;
+            }
+            case 'innerShadowSpread': {
+                const is = node.effects.innerShadow ? { ...node.effects.innerShadow } : { color: [0, 0, 0, 0.5] as [number, number, number, number], blur: 5, offsetX: 0, offsetY: 0 };
+                is.spread = num;
+                node.effects = { innerShadow: is };
+                break;
+            }
+        }
+        node.invalidate();
+    }
+
     private syncFromNodes() {
         try {
             if (this.selectedNodes.size === 0) return;
@@ -1499,18 +1950,33 @@ export class PropertyPanel {
             const firstNode = nodes[0];
 
             // 1. 获取共同值或 Mixed 状态
-            const getMixedValue = (getter: (n: Node) => any) => {
-                const firstValue = getter(firstNode);
-                const isMixed = nodes.some(n => getter(n) !== firstValue);
+            const getMixedValueByKey = (key: string) => {
+                const firstValue = this.getNodePropertyValue(firstNode, key);
+                const isMixed = nodes.some(n => this.getNodePropertyValue(n, key) !== firstValue);
                 return { value: firstValue, isMixed };
             };
 
             // 2. 更新基础属性 (Name)
             if (this.fields['name']) {
-                const { value, isMixed } = getMixedValue(n => n.name);
+                const { value, isMixed } = getMixedValueByKey('name');
                 this.fields['name'].value = isMixed ? 'Mixed' : (value || '');
                 this.fields['name'].placeholder = isMixed ? 'Mixed' : '';
             }
+
+            // 2.1 更新 Locked / Visible 状态
+            ['locked', 'visible'].forEach(key => {
+                const btn = (this.fields as any)[key];
+                if (btn && btn.updateUI) {
+                    const { value, isMixed } = getMixedValueByKey(key);
+                    btn.updateUI(isMixed ? false : !!value);
+                    // If mixed, we might want to show a mixed state, but for now just false
+                    if (isMixed) {
+                        btn.style.opacity = '0.5';
+                    } else {
+                        btn.style.opacity = '1';
+                    }
+                }
+            });
 
             // 3. 更新 Text 内容 (如果是 Text 节点)
             const textContentContainer = document.getElementById('text-content-container');
@@ -1518,7 +1984,7 @@ export class PropertyPanel {
                 const allTextNodes = nodes.every(n => (n as any).text !== undefined || (n as any).content !== undefined);
                 textContentContainer.style.display = allTextNodes ? 'block' : 'none';
                 if (allTextNodes && this.fields['textContent']) {
-                    const { value, isMixed } = getMixedValue(n => (n as any).text || (n as any).content || '');
+                    const { value, isMixed } = getMixedValueByKey('textContent');
                     this.fields['textContent'].value = isMixed ? 'Mixed' : (value || '');
                 }
             }
@@ -1529,7 +1995,7 @@ export class PropertyPanel {
                 const allSpriteNodes = nodes.every(n => (n as any).textureUrl !== undefined);
                 imageSectionContainer.style.display = allSpriteNodes ? 'block' : 'none';
                 if (allSpriteNodes && this.fields['textureUrl']) {
-                    const { value, isMixed } = getMixedValue(n => (n as any).textureUrl);
+                    const { value, isMixed } = getMixedValueByKey('textureUrl');
                     this.fields['textureUrl'].value = isMixed ? 'Mixed' : (value || '');
                 }
             }
@@ -1538,19 +2004,7 @@ export class PropertyPanel {
             const layoutFields = ['x', 'y', 'width', 'height', 'rotation', 'scaleX', 'scaleY'];
             layoutFields.forEach(key => {
                 if (this.fields[key]) {
-                    const { value, isMixed } = getMixedValue(n => {
-                        switch(key) {
-                            case 'x': return Math.round(n.x);
-                            case 'y': return Math.round(n.y);
-                            case 'width': return Math.round(n.width);
-                            case 'height': return Math.round(n.height);
-                            case 'rotation': return Math.round(n.transform.rotation * 180 / Math.PI);
-                            case 'scaleX': return parseFloat(n.scaleX.toFixed(2));
-                            case 'scaleY': return parseFloat(n.scaleY.toFixed(2));
-                            default: return 0;
-                        }
-                    });
-                    console.log(`[PropertyPanel] sync field ${key}: ${value} (mixed: ${isMixed})`);
+                    const { value, isMixed } = getMixedValueByKey(key);
                     this.fields[key].value = isMixed ? '' : value.toString();
                     this.fields[key].placeholder = isMixed ? 'Mixed' : '';
                 }
@@ -1558,16 +2012,7 @@ export class PropertyPanel {
 
             // 5. 更新外观 (Appearance)
             if (this.fields['backgroundColor']) {
-                const { value, isMixed } = getMixedValue(n => {
-                    if ((n as any).color instanceof Float32Array) {
-                        const c = (n as any).color;
-                        return this.rgbaToHex([c[0], c[1], c[2], c[3]]);
-                    }
-                    if ((n as any).fillStyle !== undefined) {
-                        return (n as any).fillStyle;
-                    }
-                    return this.rgbaToHex(n.style.backgroundColor || [1,1,1,1]);
-                });
+                const { value, isMixed } = getMixedValueByKey('backgroundColor');
                 this.fields['backgroundColor'].value = isMixed ? 'Mixed' : value;
                 const field = this.fields['backgroundColor'] as any;
                 if (field.colorPicker) {
@@ -1577,34 +2022,23 @@ export class PropertyPanel {
                     field.colorPreview.style.backgroundColor = isMixed ? 'transparent' : value;
                 }
                 
-                const { value: opacity, isMixed: opacityMixed } = getMixedValue(n => {
-                    if ((n as any).color instanceof Float32Array) {
-                        return Math.round((n as any).color[3] * 100);
-                    }
-                    return Math.round((n.style.backgroundColor?.[3] ?? 1) * 100);
-                });
+                const { value: opacity, isMixed: opacityMixed } = getMixedValueByKey('backgroundColorOpacity');
                 if (field.opacityInput) {
-                    field.opacityInput.value = opacityMixed ? 'Mixed' : opacity + '%';
+                    field.opacityInput.value = opacityMixed ? 'Mixed' : Math.round(opacity * 100) + '%';
                 }
             }
 
             // 5.1 更新圆角 (Radius)
             if (this.fields['borderRadius']) {
-                const { value, isMixed } = getMixedValue(n => {
-                    if (Array.isArray(n.style.borderRadius)) return n.style.borderRadius[0];
-                    return n.style.borderRadius || 0;
-                });
+                const { value, isMixed } = getMixedValueByKey('borderRadius');
                 this.fields['borderRadius'].value = isMixed ? '' : value.toString();
                 this.fields['borderRadius'].placeholder = isMixed ? 'Mixed' : '';
             }
             
             // 更新分项圆角
-            ['borderRadiusTL', 'borderRadiusTR', 'borderRadiusBR', 'borderRadiusBL'].forEach((key, i) => {
+            ['borderRadiusTL', 'borderRadiusTR', 'borderRadiusBR', 'borderRadiusBL'].forEach((key) => {
                 if (this.fields[key]) {
-                    const { value, isMixed } = getMixedValue(n => {
-                        if (Array.isArray(n.style.borderRadius)) return n.style.borderRadius[i];
-                        return n.style.borderRadius || 0;
-                    });
+                    const { value, isMixed } = getMixedValueByKey(key);
                     this.fields[key].value = isMixed ? '' : value.toString();
                     this.fields[key].placeholder = isMixed ? 'Mixed' : '';
                 }
@@ -1612,13 +2046,13 @@ export class PropertyPanel {
 
             // 6. 更新边框 (Stroke)
             if (this.fields['borderWidth']) {
-                const { value, isMixed } = getMixedValue(n => n.style.borderWidth || 0);
+                const { value, isMixed } = getMixedValueByKey('borderWidth');
                 this.fields['borderWidth'].value = isMixed ? '' : value.toString();
                 this.fields['borderWidth'].placeholder = isMixed ? 'Mixed' : '';
             }
 
             if (this.fields['borderColor']) {
-                const { value, isMixed } = getMixedValue(n => this.rgbaToHex(n.style.borderColor || [0,0,0,0]));
+                const { value, isMixed } = getMixedValueByKey('borderColor');
                 this.fields['borderColor'].value = isMixed ? 'Mixed' : value;
                 const field = this.fields['borderColor'] as any;
                 if (field.colorPicker) {
@@ -1630,58 +2064,48 @@ export class PropertyPanel {
             }
 
             if (this.fields['strokeType']) {
-                const { value, isMixed } = getMixedValue(n => n.style.strokeType || 'inner');
+                const { value, isMixed } = getMixedValueByKey('strokeType');
                 this.fields['strokeType'].value = isMixed ? '' : value;
             }
 
             if (this.fields['strokeStyle']) {
-                const { value, isMixed } = getMixedValue(n => n.style.strokeStyle || 'solid');
+                const { value, isMixed } = getMixedValueByKey('strokeStyle');
                 this.fields['strokeStyle'].value = isMixed ? '' : value;
             }
 
             if (this.fields['strokeDash']) {
-                const { value, isMixed } = getMixedValue(n => n.style.strokeDashArray?.[0] || 0);
+                const { value, isMixed } = getMixedValueByKey('strokeDash');
                 this.fields['strokeDash'].value = isMixed ? '' : value.toString();
                 this.fields['strokeDash'].placeholder = isMixed ? 'Mixed' : '';
             }
 
             if (this.fields['strokeGap']) {
-                const { value, isMixed } = getMixedValue(n => n.style.strokeDashArray?.[1] || 0);
+                const { value, isMixed } = getMixedValueByKey('strokeGap');
                 this.fields['strokeGap'].value = isMixed ? '' : value.toString();
                 this.fields['strokeGap'].placeholder = isMixed ? 'Mixed' : '';
             }
 
             // 6.1 更新特效 (Effects)
             if (this.fields['layerBlur']) {
-                const { value, isMixed } = getMixedValue(n => n.effects.layerBlur || 0);
+                const { value, isMixed } = getMixedValueByKey('layerBlur');
                 this.fields['layerBlur'].value = isMixed ? '' : value.toString();
                 this.fields['layerBlur'].placeholder = isMixed ? 'Mixed' : '';
             }
 
             if (this.fields['backgroundBlur']) {
-                const { value, isMixed } = getMixedValue(n => n.effects.backgroundBlur || 0);
+                const { value, isMixed } = getMixedValueByKey('backgroundBlur');
                 this.fields['backgroundBlur'].value = isMixed ? '' : value.toString();
                 this.fields['backgroundBlur'].placeholder = isMixed ? 'Mixed' : '';
             }
 
             // Outer Shadow
             if (this.fields['outerShadowColor']) {
-                const { value, isMixed } = getMixedValue(n => this.rgbaToHex(n.effects.outerShadow?.color || [0,0,0,0]));
+                const { value, isMixed } = getMixedValueByKey('outerShadowColor');
                 this.fields['outerShadowColor'].value = isMixed ? 'Mixed' : value;
             }
             ['outerShadowX', 'outerShadowY', 'outerShadowBlur', 'outerShadowSpread'].forEach(key => {
                 if (this.fields[key]) {
-                    const { value, isMixed } = getMixedValue(n => {
-                        const s = n.effects.outerShadow;
-                        if (!s) return 0;
-                        switch(key) {
-                            case 'outerShadowX': return s.offsetX;
-                            case 'outerShadowY': return s.offsetY;
-                            case 'outerShadowBlur': return s.blur;
-                            case 'outerShadowSpread': return s.spread || 0;
-                            default: return 0;
-                        }
-                    });
+                    const { value, isMixed } = getMixedValueByKey(key);
                     this.fields[key].value = isMixed ? '' : value.toString();
                     this.fields[key].placeholder = isMixed ? 'Mixed' : '';
                 }
@@ -1689,22 +2113,12 @@ export class PropertyPanel {
 
             // Inner Shadow
             if (this.fields['innerShadowColor']) {
-                const { value, isMixed } = getMixedValue(n => this.rgbaToHex(n.effects.innerShadow?.color || [0,0,0,0]));
+                const { value, isMixed } = getMixedValueByKey('innerShadowColor');
                 this.fields['innerShadowColor'].value = isMixed ? 'Mixed' : value;
             }
             ['innerShadowX', 'innerShadowY', 'innerShadowBlur', 'innerShadowSpread'].forEach(key => {
                 if (this.fields[key]) {
-                    const { value, isMixed } = getMixedValue(n => {
-                        const s = n.effects.innerShadow;
-                        if (!s) return 0;
-                        switch(key) {
-                            case 'innerShadowX': return s.offsetX;
-                            case 'innerShadowY': return s.offsetY;
-                            case 'innerShadowBlur': return s.blur;
-                            case 'innerShadowSpread': return s.spread || 0;
-                            default: return 0;
-                        }
-                    });
+                    const { value, isMixed } = getMixedValueByKey(key);
                     this.fields[key].value = isMixed ? '' : value.toString();
                     this.fields[key].placeholder = isMixed ? 'Mixed' : '';
                 }
@@ -1714,8 +2128,8 @@ export class PropertyPanel {
             const hConstraintField = this.fields['constraints.horizontal'] as unknown as HTMLSelectElement;
             const vConstraintField = this.fields['constraints.vertical'] as unknown as HTMLSelectElement;
             if (hConstraintField && vConstraintField) {
-                const { value: hVal, isMixed: hMixed } = getMixedValue(n => n.style.constraints?.horizontal || 'min');
-                const { value: vVal, isMixed: vMixed } = getMixedValue(n => n.style.constraints?.vertical || 'min');
+                const { value: hVal, isMixed: hMixed } = getMixedValueByKey('constraints.horizontal');
+                const { value: vVal, isMixed: vMixed } = getMixedValueByKey('constraints.vertical');
                 
                 hConstraintField.value = hMixed ? '' : hVal;
                 vConstraintField.value = vMixed ? '' : vVal;
@@ -1730,124 +2144,58 @@ export class PropertyPanel {
         }
     }
 
-    private applyChange(key: string, value: string, type: 'number' | 'color' | 'text') {
+    private applyChange(key: string, value: any, type: 'number' | 'color' | 'text' | 'boolean', recordHistory: boolean = true) {
         if (this.selectedNodes.size === 0) return;
         if (value === 'Mixed' || value === '') return;
 
-        this.selectedNodes.forEach(node => {
-            if (type === 'number') {
-                const num = parseFloat(value);
-                if (isNaN(num)) return;
+        const nodesToApply = Array.from(this.selectedNodes).filter(node => 
+            !node.locked || key === 'locked' || key === 'visible'
+        );
+        if (nodesToApply.length === 0) return;
 
-                switch (key) {
-                    case 'x': node.setPosition(num, node.y); break;
-                    case 'y': node.setPosition(node.x, num); break;
-                    case 'width': node.width = num; break;
-                    case 'height': node.height = num; break;
-                    case 'rotation': node.rotation = num * Math.PI / 180; break;
-                    case 'scaleX': node.setTransform(node.x, node.y, num, node.scaleY); break;
-                    case 'scaleY': node.setTransform(node.x, node.y, node.scaleX, num); break;
-                    case 'borderRadius': node.style.borderRadius = num; break;
-                    case 'borderWidth': node.style.borderWidth = num; break;
-                    case 'backgroundBlur': node.effects.backgroundBlur = num; break;
-                    case 'layerBlur': node.effects.layerBlur = num; break;
-                    case 'borderRadiusTL': 
-                        if (!Array.isArray(node.style.borderRadius)) node.style.borderRadius = [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
-                        (node.style.borderRadius as number[])[0] = num;
-                        break;
-                    case 'borderRadiusTR': 
-                        if (!Array.isArray(node.style.borderRadius)) node.style.borderRadius = [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
-                        (node.style.borderRadius as number[])[1] = num;
-                        break;
-                    case 'borderRadiusBR': 
-                        if (!Array.isArray(node.style.borderRadius)) node.style.borderRadius = [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
-                        (node.style.borderRadius as number[])[2] = num;
-                        break;
-                    case 'borderRadiusBL': 
-                        if (!Array.isArray(node.style.borderRadius)) node.style.borderRadius = [node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0, node.style.borderRadius || 0];
-                        (node.style.borderRadius as number[])[3] = num;
-                        break;
-                    case 'outerShadowX': if (!node.effects.outerShadow) node.effects.outerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.outerShadow.offsetX = num; break;
-                    case 'outerShadowY': if (!node.effects.outerShadow) node.effects.outerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.outerShadow.offsetY = num; break;
-                    case 'outerShadowBlur': if (!node.effects.outerShadow) node.effects.outerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.outerShadow.blur = num; break;
-                    case 'outerShadowSpread': if (!node.effects.outerShadow) node.effects.outerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.outerShadow.spread = num; break;
-                    case 'innerShadowX': if (!node.effects.innerShadow) node.effects.innerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.innerShadow.offsetX = num; break;
-                    case 'innerShadowY': if (!node.effects.innerShadow) node.effects.innerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.innerShadow.offsetY = num; break;
-                    case 'innerShadowBlur': if (!node.effects.innerShadow) node.effects.innerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.innerShadow.blur = num; break;
-                    case 'innerShadowSpread': if (!node.effects.innerShadow) node.effects.innerShadow = { color: [0,0,0,0.5], blur: 5, offsetX: 0, offsetY: 0 }; node.effects.innerShadow.spread = num; break;
-                    case 'strokeDash':
-                        if (!node.style.strokeDashArray) node.style.strokeDashArray = [num, 0];
-                        else node.style.strokeDashArray[0] = num;
-                        break;
-                    case 'strokeGap':
-                        if (!node.style.strokeDashArray) node.style.strokeDashArray = [0, num];
-                        else node.style.strokeDashArray[1] = num;
-                        break;
-                    // ... 其他 number 属性
-                }
-            } else if (type === 'color') {
-                const rgba = this.hexToRgba(value);
-                if (!rgba) return;
-                const opacityInput = (this.fields[key] as any).opacityInput;
-                if (opacityInput && opacityInput.value !== 'Mixed') {
-                    let opacity = parseInt(opacityInput.value) / 100;
-                    if (!isNaN(opacity)) rgba[3] = Math.max(0, Math.min(1, opacity));
-                }
+        // 如果需要记录历史，先记录初始状态
+        let startStates: Map<Node, any> | null = null;
+        if (recordHistory) {
+            startStates = new Map();
+            nodesToApply.forEach(node => {
+                startStates!.set(node, this.getNodePropertyValue(node, key));
+            });
+        }
 
-                switch (key) {
-                    case 'backgroundColor':
-                        node.style.backgroundColor = rgba;
-                        if ((node as any).color instanceof Float32Array) {
-                            (node as any).color = new Float32Array(rgba);
-                            node.invalidate();
-                        }
-                        if ((node as any).fillStyle !== undefined) {
-                            (node as any).fillStyle = value;
-                            (node as any)._contentDirty = true;
-                            node.invalidate();
-                        }
-                        break;
-                    case 'borderColor': node.style.borderColor = rgba; break;
-                    case 'outerShadowColor':
-                        if (!node.effects.outerShadow) node.effects.outerShadow = { color: rgba, blur: 5, offsetX: 0, offsetY: 0 };
-                        else node.effects.outerShadow.color = rgba;
-                        break;
-                    case 'innerShadowColor':
-                        if (!node.effects.innerShadow) node.effects.innerShadow = { color: rgba, blur: 5, offsetX: 0, offsetY: 0 };
-                        else node.effects.innerShadow.color = rgba;
-                        break;
-                    // ... 其他 color 属性
-                }
-            } else if (type === 'text') {
-                switch (key) {
-                    case 'name': node.name = value; break;
-                    case 'textContent':
-                        if ((node as any).text !== undefined) {
-                            (node as any).text = value;
-                            (node as any)._contentDirty = true;
-                        } else if ((node as any).content !== undefined) {
-                            (node as any).content = value;
-                            (node as any)._contentDirty = true;
-                        }
-                        break;
-                    case 'textureUrl':
-                        if ((node as any).textureUrl !== undefined) {
-                            (node as any).textureUrl = value;
-                        }
-                        break;
-                    case 'strokeType': node.style.strokeType = value as any; break;
-                    case 'strokeStyle': node.style.strokeStyle = value as any; break;
-                }
-            }
-            node.invalidate();
+        nodesToApply.forEach(node => {
+            this.setNodePropertyValue(node, key, value);
         });
+
+        // 如果需要记录历史，记录最终状态并存入历史管理器
+        if (recordHistory && startStates) {
+            const endStates = new Map();
+            let changed = false;
+            nodesToApply.forEach(node => {
+                const endVal = this.getNodePropertyValue(node, key);
+                endStates.set(node, endVal);
+                if (endVal !== startStates!.get(node)) {
+                    changed = true;
+                }
+            });
+
+            if (changed) {
+                const command = new PropertyCommand(
+                    nodesToApply,
+                    key,
+                    startStates,
+                    endStates,
+                    (node, val) => this.setNodePropertyValue(node, key, val)
+                );
+                this.engine.history.push(command);
+            }
+        }
 
         if (this.onPropertyChange) {
             this.onPropertyChange();
         }
     }
 
-    private rgbaToHex(rgba: [number, number, number, number]): string {
+    private rgbaToHex(rgba: [number, number, number, number] | Float32Array | number[]): string {
         const r = Math.round(rgba[0] * 255).toString(16).padStart(2, '0');
         const g = Math.round(rgba[1] * 255).toString(16).padStart(2, '0');
         const b = Math.round(rgba[2] * 255).toString(16).padStart(2, '0');

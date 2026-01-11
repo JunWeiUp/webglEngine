@@ -1,5 +1,5 @@
-import { Node } from '../display/Node';
-import { AuxiliaryLayer } from '../display/AuxiliaryLayer';
+import { Node } from '../scene/Node';
+import { AuxiliaryLayer } from '../interaction/AuxiliaryLayer';
 
 interface OutlineItem {
     node: Node;
@@ -8,8 +8,8 @@ interface OutlineItem {
     isExpanded: boolean;
 }
 
-import { Renderer } from '../core/Renderer';
-import { InteractionManager } from '../events/InteractionManager';
+import { Renderer } from '../rendering/Renderer';
+import { InteractionManager } from '../interaction/InteractionManager';
 
 export class OutlineView {
     private container: HTMLElement;
@@ -29,11 +29,11 @@ export class OutlineView {
     
     private itemHeight: number = 24; // px
     
-    // Cache map for updating highlight without full re-render
+    // Cache map for updating highlight without full re-render·
     // Key: Node, Value: DOM Element currently rendered
     private renderedNodeMap: Map<Node, HTMLElement> = new Map();
 
-    constructor(rootNode: Node, auxLayer: AuxiliaryLayer, renderer: Renderer, interaction: InteractionManager) {
+    constructor(rootNode: Node, auxLayer: AuxiliaryLayer, _renderer: Renderer, interaction: InteractionManager) {
         this.rootNode = rootNode;
         this.auxLayer = auxLayer;
         this.interaction = interaction;
@@ -359,6 +359,9 @@ export class OutlineView {
             e.stopPropagation();
             item.node.locked = !item.node.locked;
             this.renderVisibleItems();
+            if (this.interaction.onSelectionChange) {
+                this.interaction.onSelectionChange();
+            }
         };
         actionsContainer.appendChild(lockBtn);
 
@@ -383,6 +386,9 @@ export class OutlineView {
             e.stopPropagation();
             item.node.visible = !item.node.visible;
             this.renderVisibleItems();
+            if (this.interaction.onSelectionChange) {
+                this.interaction.onSelectionChange();
+            }
         };
         actionsContainer.appendChild(visibilityBtn);
 

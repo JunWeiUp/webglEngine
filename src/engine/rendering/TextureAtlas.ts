@@ -1,5 +1,5 @@
 import { Texture } from './Texture';
-import { TextureManager } from '../utils/TextureManager';
+import { TextureManager } from './TextureManager';
 import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 export class TextureAtlas {

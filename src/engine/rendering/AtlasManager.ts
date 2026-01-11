@@ -1,5 +1,4 @@
-import { TextureManager } from './TextureManager';
-import { MemoryTracker, MemoryCategory } from './MemoryProfiler';
+import { MemoryTracker, MemoryCategory } from '../utils/MemoryProfiler';
 
 /**
  * 简单的纹理图集管理器 (单例模式)
